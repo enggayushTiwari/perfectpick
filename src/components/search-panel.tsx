@@ -1,5 +1,6 @@
 "use client";
 
+import type { FormEvent } from "react";
 import { useDeferredValue, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { SearchResult } from "@/lib/contracts";
@@ -8,6 +9,29 @@ type SearchPanelProps = {
   companies: SearchResult[];
   className?: string;
 };
+
+function getLocalMatches(companies: SearchResult[], value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return companies.slice(0, 6);
+  }
+
+  return companies
+    .filter((company) => {
+      const haystack = [
+        company.symbol,
+        company.companyName,
+        company.sector,
+        company.exchange,
+        ...company.tags
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalized);
+    })
+    .slice(0, 8);
+}
 
 export function SearchPanel({ companies, className }: SearchPanelProps) {
   const [query, setQuery] = useState("");
@@ -23,6 +47,8 @@ export function SearchPanel({ companies, className }: SearchPanelProps) {
       return;
     }
 
+    setResults(getLocalMatches(companies, normalized));
+
     const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       try {
@@ -30,10 +56,15 @@ export function SearchPanel({ companies, className }: SearchPanelProps) {
           signal: controller.signal
         });
         const payload = (await response.json()) as { results?: SearchResult[] };
-        setResults(payload.results?.slice(0, 8) ?? []);
+        const remoteResults = payload.results?.slice(0, 8) ?? [];
+        const merged = [...getLocalMatches(companies, normalized), ...remoteResults].filter(
+          (company, index, collection) =>
+            collection.findIndex((candidate) => candidate.symbol === company.symbol) === index
+        );
+        setResults(merged.slice(0, 8));
       } catch {
         if (!controller.signal.aborted) {
-          setResults([]);
+          setResults(getLocalMatches(companies, normalized));
         }
       }
     }, 180);
@@ -50,18 +81,37 @@ export function SearchPanel({ companies, className }: SearchPanelProps) {
     });
   }
 
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const bestMatch = results[0];
+    if (bestMatch) {
+      openStock(bestMatch.symbol);
+    }
+  }
+
   return (
     <div className={className}>
-      <label className="search-shell">
-        <span className="search-label">Search NSE / BSE names</span>
-        <input
-          aria-label="Search stocks"
-          className="search-input"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Try RELIANCE, TCS, or Infosys"
-        />
-      </label>
+      <form className="search-shell" onSubmit={handleSubmit}>
+        <label>
+          <span className="search-label">Search NSE / BSE names</span>
+          <input
+            aria-label="Search stocks"
+            className="search-input"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Try RELIANCE, TCS, or Infosys"
+            list="stock-search-suggestions"
+            autoComplete="off"
+          />
+        </label>
+        <datalist id="stock-search-suggestions">
+          {results.map((company) => (
+            <option key={company.symbol} value={company.symbol}>
+              {company.companyName}
+            </option>
+          ))}
+        </datalist>
+      </form>
       <div className="search-results">
         {results.map((company) => (
           <button
