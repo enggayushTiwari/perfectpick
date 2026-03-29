@@ -1,0 +1,54 @@
+[
+  {
+    "company": {
+      "symbol": "INFY",
+      "exchange": "NSE"
+    },
+    "presentationDate": "2026-03-29",
+    "highlights": {
+      "yearly": [
+        {
+          "fiscalYear": "FY25",
+          "revenueCr": 161800,
+          "ebitdaCr": 41020,
+          "patCr": 26720,
+          "ebitdaMarginPct": 25.4,
+          "patMarginPct": 16.5,
+          "roePct": 31.2,
+          "rocePct": 38.5
+        }
+      ],
+      "quarterly": [
+        {
+          "fiscalQuarter": "Q3 FY26",
+          "revenueCr": 41050,
+          "ebitdaCr": 10480,
+          "patCr": 6810
+        }
+      ],
+      "ratios": {
+        "roePct": 31.4,
+        "rocePct": 38.8,
+        "revenueGrowthPct": 9.4
+      }
+    },
+    "segmentMix": [
+      { "label": "Financial Services", "valuePct": 29, "asOfPeriod": "FY26E" }
+    ],
+    "geographyMix": [
+      { "label": "North America", "valuePct": 58, "asOfPeriod": "FY26E" }
+    ],
+    "managementMessages": [
+      {
+        "message": "Execution consistency and discretionary-demand commentary remain the two variables to track.",
+        "sourceUrl": "https://www.infosys.com",
+        "excerpt": "Execution consistency remains key."
+      }
+    ],
+    "peerGroup": {
+      "slug": "largecap-leaders",
+      "label": "Large Cap Leaders",
+      "members": ["TCS", "RELIANCE"]
+    }
+  }
+]

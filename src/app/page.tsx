@@ -31,8 +31,8 @@ export default async function HomePage() {
           <h1>Search-first stock reading for Indian markets.</h1>
           <p>
             PerfectPick turns end-of-day market data, filings, news, and structured strategy logic into one
-            responsive web experience. The current starter reads live Supabase public views where data has
-            been loaded, while leaving a narrow fallback path for tabs that still need deeper ingestion.
+            responsive web experience. Phase 0 surfaces now read only from live Supabase public views for
+            search, stock identity, source health, and admin monitoring.
           </p>
           <div className="pill-row">
             <div className="pill">
@@ -96,10 +96,21 @@ export default async function HomePage() {
                 <div className={`status-chip ${source.status === "warning" ? "warning" : ""}`}>
                   <strong>{source.adapter}</strong>
                 </div>
+                <p>{source.status}</p>
                 <p>{source.freshness}</p>
                 <p className="muted">{source.note}</p>
               </div>
             ))}
+            {sources.length === 0 ? (
+              <div className="status-card">
+                <div className="status-chip warning">
+                  <strong>Platform monitoring</strong>
+                </div>
+                <p>warning</p>
+                <p>No live source rows</p>
+                <p className="muted">Run the setup and initial refresh jobs so the Phase 0 monitoring layer has live data.</p>
+              </div>
+            ) : null}
           </div>
         </SectionCard>
       </div>
@@ -129,6 +140,7 @@ export default async function HomePage() {
                 <p className="muted">{job.note}</p>
               </div>
             ))}
+            {jobs.length === 0 ? <div className="metric-card">No ingestion jobs have been recorded yet.</div> : null}
           </div>
         </SectionCard>
       </div>

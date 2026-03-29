@@ -275,6 +275,7 @@ input {
 .metric-card,
 .strategy-card,
 .scenario-card,
+.ai-card,
 .news-card,
 .peer-card,
 .status-card,
@@ -283,6 +284,40 @@ input {
   border-radius: 18px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.82);
+}
+
+.trust-banner {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.trust-panel {
+  padding: 0.9rem 1rem;
+  border-radius: 18px;
+  border: 1px dashed rgba(24, 32, 43, 0.18);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.trust-panel.fresh {
+  border-color: rgba(25, 135, 84, 0.25);
+  background: rgba(25, 135, 84, 0.06);
+}
+
+.trust-panel.recent {
+  border-color: rgba(217, 108, 23, 0.2);
+  background: rgba(217, 108, 23, 0.05);
+}
+
+.trust-panel.stale,
+.trust-panel.warning {
+  border-color: rgba(186, 91, 23, 0.3);
+  background: rgba(186, 91, 23, 0.08);
+}
+
+.trust-panel strong {
+  display: block;
+  margin-bottom: 0.3rem;
 }
 
 .strategy-card[data-matched="true"] {
@@ -315,6 +350,26 @@ input {
 .section-card {
   display: grid;
   gap: 1rem;
+}
+
+.ai-card {
+  display: grid;
+  gap: 0.85rem;
+  background: linear-gradient(180deg, rgba(10, 88, 202, 0.05), rgba(255, 255, 255, 0.9));
+}
+
+.ai-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ai-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.45rem;
 }
 
 .stock-hero {
@@ -447,6 +502,22 @@ td {
 .page-stack {
   display: grid;
   gap: 1rem;
+}
+
+.scheduler-controls {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.scheduler-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.scheduler-button-row .ghost-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 @media (max-width: 980px) {

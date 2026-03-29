@@ -5,6 +5,17 @@ type SparklineProps = {
 };
 
 export function Sparkline({ prices }: SparklineProps) {
+  if (!prices.length) {
+    return (
+      <div className="chart-shell">
+        <div className="metric-card">
+          <strong>Price history not loaded</strong>
+          <p className="muted">Daily OHLCV data has not been persisted for this symbol yet.</p>
+        </div>
+      </div>
+    );
+  }
+
   const closes = prices.map((point) => point.close);
   const min = Math.min(...closes);
   const max = Math.max(...closes);
@@ -41,4 +52,3 @@ export function Sparkline({ prices }: SparklineProps) {
     </div>
   );
 }
-

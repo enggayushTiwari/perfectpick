@@ -56,14 +56,32 @@ export type FinancialLine = {
   netDebtToEbitda: number;
 };
 
+export type BusinessNote = {
+  id: string;
+  sourceKind: string;
+  sourceUrl?: string;
+  note: string;
+  sourceExcerpt?: string;
+  createdAt?: string;
+};
+
+export type NewsEntity = {
+  entityType: string;
+  entityName: string;
+  relevanceScore?: number;
+};
+
 export type FundamentalsSnapshot = {
   headline: string;
+  liveStatus: "live" | "partial" | "missing";
+  asOfDate?: string;
   metricCards: MetricCard[];
   yearly: FinancialLine[];
   quarterly: FinancialLine[];
   segmentMix: RevenueSplit[];
   geographyMix: RevenueSplit[];
   peerComparison: PeerRow[];
+  businessNotes: BusinessNote[];
   filingNotes: string[];
 };
 
@@ -86,7 +104,16 @@ export type PriceLevel = {
   reason: string;
 };
 
+export type CorporateAction = {
+  id: string;
+  actionType: string;
+  actionDate: string;
+  details: Record<string, unknown>;
+};
+
 export type TechnicalSnapshot = {
+  liveStatus: "live" | "partial" | "missing";
+  asOfDate?: string;
   trendState: string;
   summary: string;
   indicators: TechnicalIndicator[];
@@ -99,11 +126,14 @@ export type NewsArticle = {
   id: string;
   headline: string;
   source: string;
+  sourceUrl?: string;
   publishedAt: string;
   relevance: "high" | "medium" | "low";
   impactScore: number;
   sentiment: "positive" | "neutral" | "negative";
   whyItMatters: string;
+  summary?: string;
+  entities?: NewsEntity[];
 };
 
 export type EventItem = {
@@ -121,15 +151,31 @@ export type BehaviorScore = {
 };
 
 export type BehaviorSnapshot = {
+  liveStatus: "live" | "partial" | "missing";
+  asOfDate?: string;
+  regimeLabel: string;
+  macroRegime: string;
   narrative: string;
+  marketContextSummary: string;
+  benchmarkSymbol?: string;
+  benchmarkReturnPct?: number;
+  relativeStrengthPct?: number;
+  contextSignals: string[];
   scores: BehaviorScore[];
 };
 
 export type StrategyEvaluation = {
   id: string;
   strategyName: string;
+  category?: string;
   matched: boolean;
   confidencePct: number;
+  evaluationDate?: string;
+  sourceSnapshotDate?: string;
+  matchedRuleCount?: number;
+  totalRuleCount?: number;
+  supportQuality?: "strong" | "moderate" | "weak";
+  provenanceNote?: string;
   support: string[];
   invalidation: string;
   explanation: string;
@@ -140,6 +186,9 @@ export type Scenario = {
   title: string;
   stance: "Bullish" | "Neutral" | "Bearish";
   confidencePct: number;
+  evaluationDate?: string;
+  sourceSnapshotDate?: string;
+  provenanceNote?: string;
   trigger: string;
   invalidation: string;
   payoffFrame: string;
@@ -198,6 +247,35 @@ export type DataQualityIssue = {
   createdAt: string;
 };
 
+export type StaleSymbol = {
+  companyId: string;
+  companyName: string;
+  exchange: "NSE" | "BSE";
+  symbol: string;
+  snapshotDate?: string;
+  snapshotAgeDays?: number;
+  status: "missing" | "stale";
+  note: string;
+};
+
+export type FilingDocument = {
+  id: string;
+  source: string;
+  symbol: string;
+  exchange: "NSE" | "BSE";
+  sourceType: string;
+  documentKind: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  inputPath?: string;
+  ocrPath?: string;
+  outputPath?: string;
+  normalizedOutputPath?: string;
+  errorMessage?: string;
+  queuedAt: string;
+  processingStartedAt?: string;
+  processingFinishedAt?: string;
+};
+
 export type AdminOverview = {
   totalSources: number;
   healthySources: number;
@@ -225,4 +303,17 @@ export type StockBundle = {
   strategies: StrategyEvaluation[];
   scenarios: Scenario[];
   patterns: PatternMatch[];
+};
+
+export type AiExplanation = {
+  section: "summary" | "fundamentals" | "technicals" | "strategies";
+  available: boolean;
+  asOf: string;
+  summary: string;
+  bullets: string[];
+  caveats: string[];
+  groundedFacts: string[];
+  generatedAt?: string;
+  model?: string;
+  reason?: string;
 };

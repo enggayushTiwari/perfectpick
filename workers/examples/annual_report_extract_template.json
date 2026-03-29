@@ -1,0 +1,58 @@
+[
+  {
+    "company": {
+      "symbol": "RELIANCE",
+      "exchange": "NSE"
+    },
+    "reportDate": "2026-03-29",
+    "financialStatements": {
+      "yearly": [
+        {
+          "fiscalYear": "FY25",
+          "revenueCr": 958410,
+          "ebitdaCr": 164846.52,
+          "patCr": 68047.11,
+          "operatingCashFlowCr": 96500,
+          "ebitdaMarginPct": 17.2,
+          "patMarginPct": 7.1,
+          "roePct": 10.6,
+          "rocePct": 9.5,
+          "netDebtToEbitda": 1.4
+        }
+      ]
+    },
+    "financialHighlights": {
+      "quarterly": [
+        {
+          "fiscalQuarter": "Q3 FY26",
+          "revenueCr": 259880,
+          "ebitdaCr": 45219.12,
+          "patCr": 18711.36
+        }
+      ]
+    },
+    "ratios": {
+      "roePct": 10.9,
+      "rocePct": 9.8,
+      "revenueGrowthPct": 8.1
+    },
+    "segments": [
+      { "segment": "Retail", "sharePct": 27, "asOfPeriod": "FY26E" }
+    ],
+    "geographies": [
+      { "geography": "India", "sharePct": 78, "asOfPeriod": "FY26E" }
+    ],
+    "managementDiscussion": [
+      {
+        "summary": "Retail same-store growth recovered sequentially, improving operating leverage support.",
+        "sourceUrl": "https://www.ril.com",
+        "excerpt": "Retail same-store growth recovered sequentially."
+      }
+    ],
+    "peerGroup": {
+      "slug": "largecap-leaders",
+      "label": "Large Cap Leaders",
+      "members": ["TCS", "INFY"]
+    }
+  }
+]

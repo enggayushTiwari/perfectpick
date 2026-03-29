@@ -89,6 +89,8 @@ export const stockBundles: Record<string, StockBundle> = {
     fundamentals: {
       headline:
         "Revenue mix remains diversified, but the current margin story still depends on telecom monetization and retail operating leverage continuing to improve.",
+      liveStatus: "live",
+      asOfDate: "2026-03-27",
       metricCards: [
         { label: "Revenue Growth", value: "8.1%", change: "+120 bps", tone: "positive" },
         { label: "EBITDA Margin", value: "17.6%", change: "+40 bps", tone: "positive" },
@@ -119,6 +121,32 @@ export const stockBundles: Record<string, StockBundle> = {
         { label: "Europe", valuePct: 6 },
         { label: "Americas", valuePct: 5 }
       ],
+      businessNotes: [
+        {
+          id: "ril-note-1",
+          sourceKind: "annual-report",
+          sourceUrl: "https://www.ril.com",
+          note: "Retail same-store growth recovered sequentially, which matters for operating leverage.",
+          sourceExcerpt: "Retail same-store growth recovered sequentially.",
+          createdAt: "2026-03-27"
+        },
+        {
+          id: "ril-note-2",
+          sourceKind: "investor-presentation",
+          sourceUrl: "https://www.ril.com",
+          note: "Telecom monetization remains the main bridge from scale to higher consolidated return ratios.",
+          sourceExcerpt: "Telecom monetization remains the main bridge.",
+          createdAt: "2026-03-27"
+        },
+        {
+          id: "ril-note-3",
+          sourceKind: "annual-report",
+          sourceUrl: "https://www.ril.com",
+          note: "Capex intensity still needs monitoring because balance-sheet comfort is good, not perfect.",
+          sourceExcerpt: "Capex intensity still needs monitoring.",
+          createdAt: "2026-03-27"
+        }
+      ],
       peerComparison: peerRows,
       filingNotes: [
         "Retail same-store growth recovered sequentially, which matters for operating leverage.",
@@ -127,6 +155,8 @@ export const stockBundles: Record<string, StockBundle> = {
       ]
     },
     technicals: {
+      liveStatus: "live",
+      asOfDate: "2026-03-27",
       trendState: "Bullish with range expansion",
       summary:
         "Price is above the 20DMA, 50DMA, and 200DMA, and volume has supported the latest breakout attempt rather than fading immediately.",
@@ -191,8 +221,23 @@ export const stockBundles: Record<string, StockBundle> = {
       }
     ],
     behavior: {
+      liveStatus: "live",
+      asOfDate: "2026-03-27",
+      regimeLabel: "Trend-following",
+      macroRegime: "Risk-on broad market",
       narrative:
         "Reliance is behaving like a high-liquidity trend stock: market-linked on broad moves, but still capable of company-specific acceleration when consumer or telecom narratives improve.",
+      marketContextSummary:
+        "The stock is participating in a supportive broad-market tape while still outperforming enough to keep the move partly company-driven.",
+      benchmarkSymbol: "^NSEI",
+      benchmarkReturnPct: 3.6,
+      relativeStrengthPct: 2.4,
+      contextSignals: [
+        "Momentum response is firm when the stock starts trending.",
+        "Recent price slope is steepening rather than flattening.",
+        "Trend decay is contained, which supports persistence.",
+        "Broader market direction is still explaining a meaningful part of the move."
+      ],
       scores: [
         { label: "Momentum Sensitivity", value: 71, interpretation: "Momentum is improving fast enough to support continuation setups." },
         { label: "Acceleration", value: 67, interpretation: "Slope has steepened during the latest advance." },
@@ -318,6 +363,8 @@ stockBundles.TCS = {
   fundamentals: {
     headline:
       "TCS remains a quality benchmark: margins are steady, client stickiness is strong, and the market still values its predictability.",
+    liveStatus: "live",
+    asOfDate: "2026-03-27",
     metricCards: [
       { label: "Revenue Growth", value: "10.6%", change: "+80 bps", tone: "positive" },
       { label: "EBITDA Margin", value: "26.1%", hint: "Healthy for the sector", tone: "positive" },
@@ -348,6 +395,32 @@ stockBundles.TCS = {
       { label: "Continental Europe", valuePct: 15 },
       { label: "Rest of World", valuePct: 17 }
     ],
+    businessNotes: [
+      {
+        id: "tcs-note-1",
+        sourceKind: "annual-report",
+        sourceUrl: "https://www.tcs.com",
+        note: "Client mining and large-deal conversion continue to matter more than short-term discretionary softness.",
+        sourceExcerpt: "Large-deal conversion remains important.",
+        createdAt: "2026-03-27"
+      },
+      {
+        id: "tcs-note-2",
+        sourceKind: "investor-presentation",
+        sourceUrl: "https://www.tcs.com",
+        note: "Margin resilience remains the quality anchor for the stock.",
+        sourceExcerpt: "Margin resilience remains a quality anchor.",
+        createdAt: "2026-03-27"
+      },
+      {
+        id: "tcs-note-3",
+        sourceKind: "annual-report",
+        sourceUrl: "https://www.tcs.com",
+        note: "Currency and BFSI commentary should stay in the monitoring set.",
+        sourceExcerpt: "Currency and BFSI commentary remain important.",
+        createdAt: "2026-03-27"
+      }
+    ],
     peerComparison: peerRows,
     filingNotes: [
       "Client mining and large-deal conversion continue to matter more than short-term discretionary softness.",
@@ -356,6 +429,8 @@ stockBundles.TCS = {
     ]
   },
   technicals: {
+    liveStatus: "live",
+    asOfDate: "2026-03-27",
     trendState: "Constructive but slower",
     summary:
       "TCS is trending upward, but the slope is steadier than momentum names. It behaves more like a quality compounder than a breakout chaser.",
@@ -402,8 +477,23 @@ stockBundles.TCS = {
     }
   ],
   behavior: {
+    liveStatus: "live",
+    asOfDate: "2026-03-27",
+    regimeLabel: "Balanced",
+    macroRegime: "Range-bound broad market",
     narrative:
       "TCS behaves like a stable quality trend: lower noise, slower acceleration, and stronger resilience when broader sentiment gets choppy.",
+    marketContextSummary:
+      "The stock is holding up in a steadier market tape, with company quality doing more of the work than broad beta alone.",
+    benchmarkSymbol: "^NSEI",
+    benchmarkReturnPct: 1.1,
+    relativeStrengthPct: 1.8,
+    contextSignals: [
+      "Momentum behavior is constructive but not aggressive.",
+      "Acceleration is measured, so trend continuation may stay slower.",
+      "Trend decay is contained, which supports persistence.",
+      "Company-specific behavior is carrying more of the tape than index beta alone."
+    ],
     scores: [
       { label: "Momentum Sensitivity", value: 59, interpretation: "Momentum builds, but usually in a measured way." },
       { label: "Acceleration", value: 48, interpretation: "Trend is steady rather than explosive." },

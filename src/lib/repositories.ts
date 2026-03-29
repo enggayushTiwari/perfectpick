@@ -1,24 +1,22 @@
 import {
   featuredPatterns,
-  ingestionJobs,
   learnGlossary,
-  marketSummary as demoMarketSummary,
-  searchIndex,
-  sourceStatuses,
-  stockBundles,
-  upcomingEvents
+  stockBundles
 } from "@/lib/demo-data";
 import type {
+  CorporateAction,
   BehaviorScore,
   BehaviorSnapshot,
   CompanySummary,
   DataQualityIssue,
   EventItem,
   FinancialLine,
+  FilingDocument,
   FundamentalsSnapshot,
   IngestionJob,
   AdminOverview,
   MetricCard,
+  BusinessNote,
   NewsArticle,
   PatternMatch,
   PeerRow,
@@ -26,6 +24,7 @@ import type {
   PriceLevel,
   PricePoint,
   SearchResult,
+  StaleSymbol,
   SourceRun,
   Scenario,
   SourceStatus,
@@ -33,7 +32,7 @@ import type {
   StrategyEvaluation,
   TechnicalIndicator
 } from "@/lib/contracts";
-import { ensureTickerHydrated, searchRemoteTickers } from "@/lib/on-demand-ingestion";
+import { ensureTickerHydrated } from "@/lib/on-demand-ingestion";
 import { createSupabaseReadClient } from "@/lib/supabase";
 
 type LiveDirectoryRow = {
@@ -107,6 +106,35 @@ type LiveAdminOverviewRow = {
   latest_activity_at: string | null;
 };
 
+type LiveStaleSymbolRow = {
+  company_id: string;
+  company_name: string;
+  exchange: "NSE" | "BSE";
+  symbol: string;
+  snapshot_date: string | null;
+  snapshot_age_days: number | null;
+  status: "missing" | "stale";
+  note: string;
+};
+
+type LiveFilingDocumentRow = {
+  id: string;
+  source: string;
+  symbol: string;
+  exchange: "NSE" | "BSE";
+  source_type: string;
+  document_kind: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  input_path: string | null;
+  ocr_path: string | null;
+  output_path: string | null;
+  normalized_output_path: string | null;
+  error_message: string | null;
+  queued_at: string;
+  processing_started_at: string | null;
+  processing_finished_at: string | null;
+};
+
 type LiveFinancialRow = {
   symbol: string;
   period: string;
@@ -126,10 +154,12 @@ type LiveMixRow = {
 };
 
 type LiveBusinessNoteRow = {
-  symbol: string;
-  note: string;
+  id: string;
   source_kind: string;
   source_url: string | null;
+  symbol: string;
+  note: string;
+  source_excerpt: string | null;
   created_at: string;
 };
 
@@ -174,6 +204,14 @@ type LivePriceLevelRow = {
   reason: string | null;
 };
 
+type LiveCorporateActionRow = {
+  symbol: string;
+  id: string;
+  action_type: string;
+  action_date: string;
+  details: Record<string, unknown> | null;
+};
+
 type LiveNewsRow = {
   symbol: string;
   id: string;
@@ -184,6 +222,9 @@ type LiveNewsRow = {
   impact_score: number | null;
   sentiment: "positive" | "neutral" | "negative" | null;
   why_it_matters: string | null;
+  summary: string | null;
+  canonical_url: string | null;
+  entities: unknown;
 };
 
 type LiveEventRow = {
@@ -198,7 +239,14 @@ type LiveEventRow = {
 type LiveBehaviorRow = {
   symbol: string;
   price_date: string;
+  regime_label: string | null;
+  macro_regime: string | null;
   narrative: string | null;
+  market_context_summary: string | null;
+  benchmark_symbol: string | null;
+  benchmark_return_pct: number | null;
+  relative_strength_pct: number | null;
+  context_signals: unknown;
   momentum_sensitivity: number | null;
   acceleration_score: number | null;
   trend_decay_score: number | null;
@@ -209,9 +257,16 @@ type LiveBehaviorRow = {
 type LiveStrategyRow = {
   symbol: string;
   id: string;
+  category: string | null;
+  evaluation_date: string;
   strategy_name: string;
   matched: boolean;
   confidence_pct: number;
+  source_snapshot_date: string | null;
+  matched_rule_count: number | null;
+  total_rule_count: number | null;
+  support_quality: "strong" | "moderate" | "weak" | null;
+  provenance_note: string | null;
   support_points: unknown;
   invalidation: string | null;
   explanation: string | null;
@@ -220,9 +275,12 @@ type LiveStrategyRow = {
 type LiveScenarioRow = {
   symbol: string;
   id: string;
+  evaluation_date: string;
   stance: "Bullish" | "Neutral" | "Bearish";
   title: string;
   confidence_pct: number;
+  source_snapshot_date: string | null;
+  provenance_note: string | null;
   trigger_condition: string | null;
   invalidation: string | null;
   payoff_frame: string | null;
@@ -301,34 +359,7 @@ function inferTone(value: number | null | undefined, positiveThreshold: number, 
   return "neutral" as const;
 }
 
-function buildFallbackOverview(symbol: string, live?: LiveOverviewRow | LiveDirectoryRow | null): CompanySummary | null {
-  const demo = lookupBundle(symbol);
-
-  if (demo && live) {
-    const tags = "tags" in live && live.tags?.length ? live.tags : demo.overview.tags;
-    const summary = live.summary || demo.overview.summary;
-    const updatedAt = "snapshot_date" in live ? live.snapshot_date || live.updated_at : live.updated_at;
-
-    return {
-      ...demo.overview,
-      companyName: live.company_name || demo.overview.companyName,
-      exchange: live.exchange || demo.overview.exchange,
-      sector: live.sector || demo.overview.sector,
-      industry: live.industry || demo.overview.industry,
-      summary,
-      tags,
-      lastUpdated: (updatedAt || demo.overview.lastUpdated).slice(0, 10),
-      close: "close" in live ? asNumber(live.close, demo.overview.close) : demo.overview.close,
-      dayChangePct:
-        "day_change_pct" in live ? asNumber(live.day_change_pct, demo.overview.dayChangePct) : demo.overview.dayChangePct,
-      marketCapCr: "market_cap_cr" in live ? asNumber(live.market_cap_cr, demo.overview.marketCapCr) : demo.overview.marketCapCr
-    };
-  }
-
-  if (demo) {
-    return demo.overview;
-  }
-
+function buildLiveOverview(live?: LiveOverviewRow | LiveDirectoryRow | null): CompanySummary | null {
   if (!live) {
     return null;
   }
@@ -353,15 +384,20 @@ function buildSkeletonBundle(overview: CompanySummary): StockBundle {
     overview,
     fundamentals: {
       headline: "Live company metadata is available. Fundamentals will populate once financial loaders run.",
+      liveStatus: "missing",
+      asOfDate: undefined,
       metricCards: [],
       yearly: [],
       quarterly: [],
       segmentMix: [],
       geographyMix: [],
       peerComparison: [],
+      businessNotes: [],
       filingNotes: []
     },
     technicals: {
+      liveStatus: "missing",
+      asOfDate: undefined,
       trendState: "Awaiting analytics load",
       summary: "Technical snapshots will appear after EOD market data and indicators are loaded.",
       indicators: [],
@@ -372,12 +408,78 @@ function buildSkeletonBundle(overview: CompanySummary): StockBundle {
     news: [],
     events: [],
     behavior: {
+      liveStatus: "missing",
+      asOfDate: undefined,
+      regimeLabel: "Awaiting analytics load",
+      macroRegime: "Awaiting market-context load",
       narrative: "Behavior metrics will appear after the analytics worker writes the first daily snapshot.",
+      marketContextSummary: "Benchmark-relative and macro-context overlays will appear after the analytics worker writes them.",
+      contextSignals: [],
       scores: []
     },
     strategies: [],
     scenarios: [],
     patterns: []
+  };
+}
+
+function toBusinessNotes(rows: LiveBusinessNoteRow[]): BusinessNote[] {
+  return rows.map((row) => ({
+    id: row.id,
+    sourceKind: row.source_kind,
+    sourceUrl: row.source_url ?? undefined,
+    note: row.note,
+    sourceExcerpt: row.source_excerpt ?? undefined,
+    createdAt: row.created_at
+  }));
+}
+
+function buildMissingTechnicals(symbol: string, overview?: LiveOverviewRow | LiveDirectoryRow | null) {
+  const technicalSummary = overview && "technical_summary" in overview ? overview.technical_summary : null;
+  return {
+    liveStatus: "missing" as const,
+    asOfDate: undefined,
+    trendState: "Awaiting analytics load",
+    summary:
+      technicalSummary ||
+      `Structured EOD prices and technical indicators are not loaded yet for ${symbol.toUpperCase()}. Run the daily market-data loader to populate charts and trend states.`,
+    indicators: [],
+    prices: [],
+    supportResistance: [],
+    events: []
+  };
+}
+
+function buildMissingFundamentals(symbol: string, overview?: LiveOverviewRow | LiveDirectoryRow | null): FundamentalsSnapshot {
+  const overviewHeadline = overview && "fundamentals_headline" in overview ? overview.fundamentals_headline : null;
+  return {
+    headline:
+      overviewHeadline ||
+      `Structured fundamentals are not loaded yet for ${symbol.toUpperCase()}. Queue annual-report, MCA/XBRL, or investor-presentation documents to populate this tab.`,
+    liveStatus: "missing",
+    asOfDate: undefined,
+    metricCards: [],
+    yearly: [],
+    quarterly: [],
+    segmentMix: [],
+    geographyMix: [],
+    peerComparison: [],
+    businessNotes: [],
+    filingNotes: []
+  };
+}
+
+function buildMissingBehavior(symbol: string): BehaviorSnapshot {
+  return {
+    liveStatus: "missing",
+    asOfDate: undefined,
+    regimeLabel: "Awaiting analytics load",
+    macroRegime: "Awaiting market-context load",
+    narrative: `Structured behavior analytics are not loaded yet for ${symbol.toUpperCase()}. Run the daily analytics refresh to populate momentum, volatility, and market-context signals.`,
+    marketContextSummary:
+      "Relative-strength, benchmark, and macro-context overlays have not been computed yet for this symbol.",
+    contextSignals: [],
+    scores: []
   };
 }
 
@@ -419,6 +521,39 @@ function normalizeSentiment(value: string | null | undefined): NewsArticle["sent
   }
 
   return "neutral";
+}
+
+function toNewsEntities(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const entity = item as Record<string, unknown>;
+      const entityType = typeof entity.entityType === "string" ? entity.entityType.trim() : "";
+      const entityName = typeof entity.entityName === "string" ? entity.entityName.trim() : "";
+      const relevanceScore =
+        typeof entity.relevanceScore === "number"
+          ? entity.relevanceScore
+          : typeof entity.relevanceScore === "string" && entity.relevanceScore.trim()
+            ? Number(entity.relevanceScore)
+            : undefined;
+
+      if (!entityType || !entityName) {
+        return null;
+      }
+
+      return {
+        entityType,
+        entityName,
+        relevanceScore: relevanceScore !== undefined && Number.isFinite(relevanceScore) ? relevanceScore : undefined
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
 }
 
 function parsePeriodOrder(period: string, kind: Period) {
@@ -627,41 +762,156 @@ function buildTechnicalIndicators(row: LiveTechnicalSnapshotRow | null, close: n
   return indicators;
 }
 
+function describeRegime(scores: Record<string, number>) {
+  if (scores.momentum >= 60 && scores.acceleration >= 55 && scores.trendDecay <= 40) {
+    return "Trend-following";
+  }
+
+  if (scores.volatility >= 65) {
+    return "High-volatility";
+  }
+
+  if (scores.marketLinkage >= 60) {
+    return "Market-linked";
+  }
+
+  if (scores.momentum <= 45 && scores.trendDecay >= 55) {
+    return "Cooling";
+  }
+
+  return "Balanced";
+}
+
+function buildBehaviorSignals(scores: Record<string, number>) {
+  const signals: string[] = [];
+
+  signals.push(
+    scores.momentum >= 60
+      ? "Momentum response is firm when the stock starts trending."
+      : scores.momentum <= 45
+        ? "Momentum follow-through is still muted."
+        : "Momentum behavior is constructive but not aggressive."
+  );
+
+  signals.push(
+    scores.acceleration >= 55
+      ? "Recent price slope is steepening rather than flattening."
+      : "Acceleration is measured, so trend continuation may stay slower."
+  );
+
+  signals.push(
+    scores.trendDecay <= 35
+      ? "Trend decay is contained, which supports persistence."
+      : scores.trendDecay >= 55
+        ? "Trend decay is elevated, so continuation needs more confirmation."
+        : "Trend decay is present but not yet dominant."
+  );
+
+  signals.push(
+    scores.volatility >= 60
+      ? "Volatility shocks can move this stock quickly, so risk framing should stay wide."
+      : "Volatility sensitivity remains relatively contained."
+  );
+
+  signals.push(
+    scores.marketLinkage >= 60
+      ? "Broader market direction is still explaining a meaningful part of the move."
+      : "Company-specific behavior is carrying more of the tape than index beta alone."
+  );
+
+  return signals;
+}
+
+function buildMarketContextSummary(
+  benchmarkSymbol: string | null,
+  benchmarkReturnPct: number | null,
+  relativeStrengthPct: number | null,
+  macroRegime: string | null
+) {
+  const benchmarkLabel = benchmarkSymbol || "^NSEI";
+  const benchmarkText =
+    benchmarkReturnPct === null
+      ? `${benchmarkLabel} context is not stored yet.`
+      : `${benchmarkLabel} is ${benchmarkReturnPct >= 0 ? "up" : "down"} ${Math.abs(benchmarkReturnPct).toFixed(1)}% over the recent lookback window.`;
+  const relativeText =
+    relativeStrengthPct === null
+      ? "Relative strength versus the benchmark is still unavailable."
+      : relativeStrengthPct >= 0
+        ? `The stock is outperforming that benchmark by ${relativeStrengthPct.toFixed(1)} percentage points.`
+        : `The stock is lagging that benchmark by ${Math.abs(relativeStrengthPct).toFixed(1)} percentage points.`;
+
+  return `${macroRegime || "Market context is not classified yet."} ${benchmarkText} ${relativeText}`;
+}
+
 function toBehaviorSnapshot(row: LiveBehaviorRow | null): BehaviorSnapshot | null {
   if (!row) {
     return null;
   }
 
+  const numericScores = {
+    momentum: asNumber(row.momentum_sensitivity),
+    acceleration: asNumber(row.acceleration_score),
+    trendDecay: asNumber(row.trend_decay_score),
+    volatility: asNumber(row.volatility_sensitivity),
+    marketLinkage: asNumber(row.market_linkage_score)
+  };
+
   const scores: BehaviorScore[] = [
     {
       label: "Momentum Sensitivity",
-      value: asNumber(row.momentum_sensitivity),
+      value: numericScores.momentum,
       interpretation: "Tracks how strongly the stock tends to respond when momentum improves."
     },
     {
       label: "Acceleration",
-      value: asNumber(row.acceleration_score),
+      value: numericScores.acceleration,
       interpretation: "Measures how quickly the recent trend slope is steepening."
     },
     {
       label: "Trend Decay",
-      value: asNumber(row.trend_decay_score),
+      value: numericScores.trendDecay,
       interpretation: "Higher values mean the existing trend is losing strength faster."
     },
     {
       label: "Volatility Sensitivity",
-      value: asNumber(row.volatility_sensitivity),
+      value: numericScores.volatility,
       interpretation: "Shows how fragile the price path looks during volatility spikes."
     },
     {
       label: "Market Linkage",
-      value: asNumber(row.market_linkage_score),
+      value: numericScores.marketLinkage,
       interpretation: "Captures how much broader market direction is explaining the move."
     }
   ];
 
+  const populatedScoreCount = Object.values(numericScores).filter((value) => value > 0).length;
+  const storedSignals = asStringArray(row.context_signals);
+  const macroContextAvailable =
+    Boolean(row.regime_label) ||
+    Boolean(row.macro_regime) ||
+    Boolean(row.market_context_summary) ||
+    row.benchmark_return_pct !== null ||
+    row.relative_strength_pct !== null ||
+    storedSignals.length > 0;
+
   return {
+    asOfDate: row.price_date,
+    liveStatus: populatedScoreCount >= 5 && macroContextAvailable ? "live" : "partial",
+    regimeLabel: row.regime_label || describeRegime(numericScores),
+    macroRegime: row.macro_regime || "Market context is not classified yet",
     narrative: row.narrative || "Behavior metrics are live, but the descriptive narrative is still sparse.",
+    marketContextSummary:
+      row.market_context_summary ||
+      buildMarketContextSummary(
+        row.benchmark_symbol,
+        row.benchmark_return_pct,
+        row.relative_strength_pct,
+        row.macro_regime
+      ),
+    benchmarkSymbol: row.benchmark_symbol ?? undefined,
+    benchmarkReturnPct: row.benchmark_return_pct ?? undefined,
+    relativeStrengthPct: row.relative_strength_pct ?? undefined,
+    contextSignals: storedSignals.length ? storedSignals : buildBehaviorSignals(numericScores),
     scores
   };
 }
@@ -773,53 +1023,28 @@ export async function getSearchResults(query = "") {
     );
   }
 
-  const normalized = query.trim().toLowerCase();
-
-  if (!normalized) {
-    return searchIndex;
-  }
-
-  const localResults = searchIndex.filter((item) => {
-    return (
-      item.symbol.toLowerCase().includes(normalized) ||
-      item.companyName.toLowerCase().includes(normalized) ||
-      item.sector.toLowerCase().includes(normalized) ||
-      item.tags.some((tag) => tag.toLowerCase().includes(normalized))
-    );
-  });
-
-  if (localResults.length) {
-    return localResults;
-  }
-
-  const remoteResults = await searchRemoteTickers(query);
-  if (remoteResults.length) {
-    return remoteResults;
-  }
-
-  return localResults;
+  return [];
 }
 
 export async function getMarketSummary() {
   const [companies, sources] = await Promise.all([getSearchResults(), getSourceStatuses()]);
 
-  if (companies.length || sources.length) {
-    const healthyCount = sources.filter((source) => source.status === "healthy").length;
-    return {
-      lastUpdated: new Date().toISOString().slice(0, 10),
-      headline: `${companies.length} listed companies are currently visible through the public app layer.`,
-      breadth: `${healthyCount} configured source adapters are reporting healthy status through the public compatibility views.`,
-      leaders: companies.slice(0, 3).map((company) => company.companyName),
-      caution: "Detailed analytics now read from Supabase public views when live rows exist, and only fall back where data has not been loaded yet."
-    };
-  }
-
-  return demoMarketSummary;
+  const healthyCount = sources.filter((source) => source.status === "healthy").length;
+  return {
+    lastUpdated: new Date().toISOString().slice(0, 10),
+    headline: `${companies.length} listed companies are currently visible through the live public app layer.`,
+    breadth: `${healthyCount} configured source adapters are currently reporting healthy status.`,
+    leaders: companies.slice(0, 3).map((company) => company.companyName),
+    caution:
+      companies.length === 0
+        ? "No live company rows are visible yet. Refresh the security master to populate the searchable universe."
+        : "Phase 0 surfaces are live-only. Deeper tabs can still use fallback until later phases are fully loaded."
+  };
 }
 
 export async function getOverview(symbol: string) {
   const live = await getLiveOverview(symbol);
-  return buildFallbackOverview(symbol, live);
+  return buildLiveOverview(live);
 }
 
 export async function getFinancials(symbol: string, period: Period) {
@@ -830,12 +1055,7 @@ export async function getFinancials(symbol: string, period: Period) {
     return toFinancialLines(liveRows, period);
   }
 
-  const bundle = lookupBundle(symbol);
-  if (!bundle) {
-    return null;
-  }
-
-  return period === "quarterly" ? bundle.fundamentals.quarterly : bundle.fundamentals.yearly;
+  return [];
 }
 
 export async function getSegments(symbol: string) {
@@ -845,7 +1065,7 @@ export async function getSegments(symbol: string) {
     return toRevenueSplits(liveRows);
   }
 
-  return lookupBundle(symbol)?.fundamentals.segmentMix ?? null;
+  return [];
 }
 
 export async function getGeography(symbol: string) {
@@ -855,7 +1075,7 @@ export async function getGeography(symbol: string) {
     return toRevenueSplits(liveRows);
   }
 
-  return lookupBundle(symbol)?.fundamentals.geographyMix ?? null;
+  return [];
 }
 
 export async function getPeers(symbol: string) {
@@ -867,7 +1087,7 @@ export async function getPeers(symbol: string) {
     return toPeerRows(liveRows, symbol);
   }
 
-  return lookupBundle(symbol)?.fundamentals.peerComparison ?? null;
+  return [];
 }
 
 export async function getFundamentals(symbol: string) {
@@ -881,24 +1101,33 @@ export async function getFundamentals(symbol: string) {
     selectRows<LiveBusinessNoteRow>("app_business_notes", { symbol, orderBy: "created_at", ascending: false })
   ]);
 
-  if (yearly?.length || quarterly?.length || segments?.length || geography?.length || peers?.length || notes?.length) {
-    const filingNotes = notes?.map((note) => note.note).slice(0, 4) ?? [];
+  const businessNotes = toBusinessNotes(notes ?? []);
+  const filingNotes = businessNotes.map((note) => note.note).slice(0, 4);
+  const loadedParts = [yearly.length > 0, quarterly.length > 0, segments.length > 0, geography.length > 0, peers.length > 0, businessNotes.length > 0].filter(Boolean).length;
+
+  if (loadedParts > 0) {
+    const liveStatus = loadedParts >= 4 ? "live" : "partial";
     return {
       headline:
         overview?.fundamentals_headline ||
         filingNotes[0] ||
-        "Structured fundamentals are live from Supabase, with financial lines, business notes, and peer context available.",
-      metricCards: buildMetricCardsFromLive(yearly ?? [], peers ?? [], symbol),
-      yearly: yearly ?? [],
-      quarterly: quarterly ?? [],
-      segmentMix: segments ?? [],
-      geographyMix: geography ?? [],
-      peerComparison: peers ?? [],
+        (liveStatus === "live"
+          ? "Structured fundamentals are live from Supabase, with financial lines, business notes, and peer context available."
+          : "Fundamentals are partially loaded. Queue more filing documents to complete yearly, mix, and peer coverage."),
+      liveStatus,
+      asOfDate: overview?.snapshot_date ?? businessNotes[0]?.createdAt?.slice(0, 10),
+      metricCards: buildMetricCardsFromLive(yearly, peers, symbol),
+      yearly,
+      quarterly,
+      segmentMix: segments,
+      geographyMix: geography,
+      peerComparison: peers,
+      businessNotes,
       filingNotes
     } satisfies FundamentalsSnapshot;
   }
 
-  return lookupBundle(symbol)?.fundamentals ?? null;
+  return buildMissingFundamentals(symbol, overview);
 }
 
 export async function getPrices(symbol: string) {
@@ -912,7 +1141,7 @@ export async function getPrices(symbol: string) {
     return toPricePoints(liveRows);
   }
 
-  return lookupBundle(symbol)?.technicals.prices ?? null;
+  return [];
 }
 
 export async function getTechnicalIndicators(symbol: string) {
@@ -926,7 +1155,7 @@ export async function getTechnicalIndicators(symbol: string) {
     return liveIndicators;
   }
 
-  return lookupBundle(symbol)?.technicals.indicators ?? null;
+  return [];
 }
 
 export async function getSupportResistance(symbol: string) {
@@ -946,7 +1175,29 @@ export async function getSupportResistance(symbol: string) {
     );
   }
 
-  return lookupBundle(symbol)?.technicals.supportResistance ?? null;
+  return [];
+}
+
+export async function getCorporateActions(symbol: string) {
+  const liveRows = await selectRows<LiveCorporateActionRow>("app_corporate_actions", {
+    symbol,
+    orderBy: "action_date",
+    ascending: false,
+    limit: 10
+  });
+
+  if (liveRows?.length) {
+    return liveRows.map(
+      (row): CorporateAction => ({
+        id: row.id,
+        actionType: row.action_type,
+        actionDate: row.action_date,
+        details: row.details ?? {}
+      })
+    );
+  }
+
+  return [];
 }
 
 export async function getTrendSummary(symbol: string) {
@@ -954,6 +1205,8 @@ export async function getTrendSummary(symbol: string) {
 
   if (technicalRow) {
     return {
+      liveStatus: asStringArray(technicalRow.technical_events).length > 0 ? "live" : "partial",
+      asOfDate: technicalRow.price_date,
       trendState: technicalRow.trend_state || "Constructive",
       summary:
         technicalRow.technical_summary ||
@@ -962,17 +1215,8 @@ export async function getTrendSummary(symbol: string) {
     };
   }
 
-  const bundle = lookupBundle(symbol);
-
-  if (!bundle) {
-    return null;
-  }
-
-  return {
-    trendState: bundle.technicals.trendState,
-    summary: bundle.technicals.summary,
-    events: bundle.technicals.events
-  };
+  const overview = await selectSingle<LiveOverviewRow>("app_stock_overview", symbol);
+  return buildMissingTechnicals(symbol, overview);
 }
 
 export async function getNews(symbol: string) {
@@ -988,16 +1232,19 @@ export async function getNews(symbol: string) {
         id: row.id,
         headline: row.headline,
         source: row.source_name,
+        sourceUrl: row.canonical_url ?? undefined,
         publishedAt: row.published_at,
         relevance: normalizeRelevance(row.relevance),
         impactScore: asNumber(row.impact_score),
         sentiment: normalizeSentiment(row.sentiment),
-        whyItMatters: row.why_it_matters || "This article is linked to the stock, but the impact note is still sparse."
+        whyItMatters: row.why_it_matters || "This article is linked to the stock, but the impact note is still sparse.",
+        summary: row.summary ?? undefined,
+        entities: toNewsEntities(row.entities)
       })
     );
   }
 
-  return lookupBundle(symbol)?.news ?? null;
+  return [];
 }
 
 export async function getEvents(symbol: string) {
@@ -1019,7 +1266,7 @@ export async function getEvents(symbol: string) {
     );
   }
 
-  return lookupBundle(symbol)?.events ?? null;
+  return [];
 }
 
 export async function getBehavior(symbol: string) {
@@ -1035,7 +1282,7 @@ export async function getBehavior(symbol: string) {
     return snapshot;
   }
 
-  return lookupBundle(symbol)?.behavior ?? null;
+  return buildMissingBehavior(symbol);
 }
 
 export async function getPatterns(symbol: string) {
@@ -1086,8 +1333,15 @@ export async function getStrategies(symbol: string) {
       (row): StrategyEvaluation => ({
         id: row.id,
         strategyName: row.strategy_name,
+        category: row.category ?? undefined,
         matched: row.matched,
         confidencePct: asNumber(row.confidence_pct),
+        evaluationDate: row.evaluation_date,
+        sourceSnapshotDate: row.source_snapshot_date ?? undefined,
+        matchedRuleCount: row.matched_rule_count ?? undefined,
+        totalRuleCount: row.total_rule_count ?? undefined,
+        supportQuality: row.support_quality ?? undefined,
+        provenanceNote: row.provenance_note ?? undefined,
         support: asStringArray(row.support_points),
         invalidation: row.invalidation || "No explicit invalidation recorded yet.",
         explanation: row.explanation || "Live strategy evaluation is available, but the explanation is still sparse."
@@ -1095,7 +1349,7 @@ export async function getStrategies(symbol: string) {
     );
   }
 
-  return lookupBundle(symbol)?.strategies ?? null;
+  return [];
 }
 
 export async function getScenarios(symbol: string) {
@@ -1112,6 +1366,9 @@ export async function getScenarios(symbol: string) {
         title: row.title,
         stance: row.stance,
         confidencePct: asNumber(row.confidence_pct),
+        evaluationDate: row.evaluation_date,
+        sourceSnapshotDate: row.source_snapshot_date ?? undefined,
+        provenanceNote: row.provenance_note ?? undefined,
         trigger: row.trigger_condition || "Awaiting a cleaner trigger definition.",
         invalidation: row.invalidation || "Awaiting a cleaner invalidation definition.",
         payoffFrame: row.payoff_frame || "Scenario payoff framing not yet provided.",
@@ -1120,7 +1377,7 @@ export async function getScenarios(symbol: string) {
     );
   }
 
-  return lookupBundle(symbol)?.scenarios ?? null;
+  return [];
 }
 
 export async function getStockBundle(symbol: string) {
@@ -1147,22 +1404,36 @@ export async function getStockBundle(symbol: string) {
     ]);
 
   const base = lookupBundle(symbol) ?? buildSkeletonBundle(overview);
+  const technicalsLoadedParts = [
+    prices.length > 0,
+    indicators.length > 0,
+    supportResistance.length > 0,
+    trend?.events.length ? true : false,
+    trend?.trendState !== "Awaiting analytics load"
+  ].filter(Boolean).length;
+  const technicalsLiveStatus: "live" | "partial" = technicalsLoadedParts >= 4 ? "live" : "partial";
+  const technicals =
+    technicalsLoadedParts > 0
+      ? {
+          liveStatus: technicalsLiveStatus,
+          asOfDate: trend?.asOfDate ?? prices.at(-1)?.date,
+          trendState: trend?.trendState ?? "Awaiting analytics load",
+          summary: trend?.summary ?? buildMissingTechnicals(symbol).summary,
+          indicators,
+          prices,
+          supportResistance,
+          events: trend?.events ?? []
+        }
+      : buildMissingTechnicals(symbol, await selectSingle<LiveOverviewRow>("app_stock_overview", symbol));
 
   return {
     ...base,
     overview,
     fundamentals: fundamentals ?? base.fundamentals,
-    technicals: {
-      trendState: trend?.trendState ?? base.technicals.trendState,
-      summary: trend?.summary ?? base.technicals.summary,
-      indicators: indicators ?? base.technicals.indicators,
-      prices: prices ?? base.technicals.prices,
-      supportResistance: supportResistance ?? base.technicals.supportResistance,
-      events: trend?.events ?? base.technicals.events
-    },
-    news: news ?? base.news,
-    events: events ?? base.events,
-    behavior: behavior ?? base.behavior,
+    technicals,
+    news,
+    events,
+    behavior,
     strategies: strategies ?? base.strategies,
     scenarios: scenarios ?? base.scenarios,
     patterns: patterns ?? base.patterns
@@ -1191,17 +1462,7 @@ export async function getScreeners() {
       });
   }
 
-  return Object.values(stockBundles).flatMap((bundle) =>
-    bundle.strategies
-      .filter((strategy) => strategy.matched)
-      .map((strategy) => ({
-        symbol: bundle.overview.symbol,
-        companyName: bundle.overview.companyName,
-        strategyName: strategy.strategyName,
-        confidencePct: strategy.confidencePct,
-        explanation: strategy.explanation
-      }))
-  );
+  return [];
 }
 
 export async function getLearnGlossary() {
@@ -1225,7 +1486,7 @@ export async function getSourceStatuses() {
     );
   }
 
-  return sourceStatuses;
+  return [];
 }
 
 export async function getIngestionJobs() {
@@ -1248,7 +1509,7 @@ export async function getIngestionJobs() {
     );
   }
 
-  return ingestionJobs;
+  return [];
 }
 
 export async function getSourceRuns() {
@@ -1291,6 +1552,63 @@ export async function getDataQualityIssues() {
         detail: row.detail,
         resolved: row.resolved,
         createdAt: row.created_at
+      })
+    );
+  }
+
+  return [];
+}
+
+export async function getStaleSymbols() {
+  const liveRows = await selectRows<LiveStaleSymbolRow>("app_stale_symbols", {
+    orderBy: "snapshot_age_days",
+    ascending: false,
+    limit: 25
+  });
+
+  if (liveRows?.length) {
+    return liveRows.map(
+      (row): StaleSymbol => ({
+        companyId: row.company_id,
+        companyName: row.company_name,
+        exchange: row.exchange,
+        symbol: row.symbol,
+        snapshotDate: row.snapshot_date ?? undefined,
+        snapshotAgeDays: row.snapshot_age_days ?? undefined,
+        status: row.status,
+        note: row.note
+      })
+    );
+  }
+
+  return [];
+}
+
+export async function getFilingDocuments() {
+  const liveRows = await selectRows<LiveFilingDocumentRow>("app_filing_documents", {
+    orderBy: "queued_at",
+    ascending: false,
+    limit: 25
+  });
+
+  if (liveRows?.length) {
+    return liveRows.map(
+      (row): FilingDocument => ({
+        id: row.id,
+        source: row.source,
+        symbol: row.symbol,
+        exchange: row.exchange,
+        sourceType: row.source_type,
+        documentKind: row.document_kind,
+        status: row.status,
+        inputPath: row.input_path ?? undefined,
+        ocrPath: row.ocr_path ?? undefined,
+        outputPath: row.output_path ?? undefined,
+        normalizedOutputPath: row.normalized_output_path ?? undefined,
+        errorMessage: row.error_message ?? undefined,
+        queuedAt: row.queued_at,
+        processingStartedAt: row.processing_started_at ?? undefined,
+        processingFinishedAt: row.processing_finished_at ?? undefined
       })
     );
   }
@@ -1378,5 +1696,5 @@ export async function getUpcomingEvents() {
     );
   }
 
-  return upcomingEvents;
+  return [];
 }

@@ -1,0 +1,84 @@
+{
+  "company": {
+    "symbol": "RELIANCE",
+    "exchange": "NSE"
+  },
+  "asOfDate": "2026-03-29",
+  "sourceKind": "annual-report",
+  "yearlyFinancials": [
+    {
+      "period": "FY25",
+      "revenueCr": 958410.0,
+      "ebitdaCr": 164846.52,
+      "patCr": 68047.11,
+      "operatingCashFlowCr": 96500.0,
+      "ebitdaMarginPct": 17.2,
+      "patMarginPct": 7.1,
+      "roePct": 10.6,
+      "rocePct": 9.5,
+      "netDebtToEbitda": 1.4
+    },
+    {
+      "period": "FY26",
+      "revenueCr": 259880.0,
+      "ebitdaCr": 45219.12,
+      "patCr": 18711.36,
+      "roePct": 10.9,
+      "rocePct": 9.8
+    }
+  ],
+  "quarterlyFinancials": [
+    {
+      "period": "Q3 FY26",
+      "revenueCr": 259880.0,
+      "ebitdaCr": 45219.12,
+      "patCr": 18711.36,
+      "roePct": 10.9,
+      "rocePct": 9.8
+    }
+  ],
+  "ratios": {
+    "roePct": 10.6,
+    "rocePct": 9.5,
+    "revenueGrowthPct": 8.1
+  },
+  "segments": [
+    {
+      "label": "Retail",
+      "valuePct": 27.0
+    },
+    {
+      "label": "Digital Services",
+      "valuePct": 23.0
+    },
+    {
+      "label": "Oil to Chemicals",
+      "valuePct": 42.0
+    }
+  ],
+  "geographies": [
+    {
+      "label": "India",
+      "valuePct": 78.0
+    },
+    {
+      "label": "Asia ex-India",
+      "valuePct": 11.0
+    }
+  ],
+  "notes": [
+    {
+      "sourceKind": "annual-report",
+      "note": "Telecom monetization remains the key bridge from scale to improved return ratios.",
+      "sourceExcerpt": "Telecom monetization remains the key bridge from scale to improved return ratios."
+    }
+  ],
+  "peerGroup": {
+    "slug": "largecap-leaders",
+    "label": "Large Cap Leaders",
+    "members": [
+      "TCS",
+      "INFY"
+    ]
+  }
+}

@@ -79,13 +79,13 @@ export function SearchPanel({ companies, className }: SearchPanelProps) {
         ))}
         {results.length === 0 ? (
           <div className="search-empty">
-            No local matches yet. Try a symbol or company keyword and the app will look beyond the current Supabase set.
+            No live matches found in the current Supabase security master. Refresh the directory import to widen search coverage.
           </div>
         ) : null}
       </div>
       <div className="search-meta">
         <span>{isPending ? "Opening stock page..." : "Fast search-first discovery"}</span>
-        <span>Local Supabase results first, remote discovery when needed</span>
+        <span>Live Supabase directory results only for the Phase 0 foundation</span>
       </div>
     </div>
   );

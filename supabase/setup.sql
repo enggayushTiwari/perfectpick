@@ -255,6 +255,14 @@ create table if not exists analytics.stock_behavior_daily (
   primary key (company_id, price_date)
 );
 
+alter table analytics.stock_behavior_daily add column if not exists regime_label text;
+alter table analytics.stock_behavior_daily add column if not exists macro_regime text;
+alter table analytics.stock_behavior_daily add column if not exists market_context_summary text;
+alter table analytics.stock_behavior_daily add column if not exists benchmark_symbol text;
+alter table analytics.stock_behavior_daily add column if not exists benchmark_return_pct numeric(8, 2);
+alter table analytics.stock_behavior_daily add column if not exists relative_strength_pct numeric(8, 2);
+alter table analytics.stock_behavior_daily add column if not exists context_signals jsonb not null default '[]'::jsonb;
+
 create table if not exists analytics.model_runs (
   id uuid primary key default gen_random_uuid(),
   model_name text not null,
@@ -288,6 +296,12 @@ create table if not exists strategy.strategy_evaluations (
   unique (strategy_id, company_id, evaluation_date)
 );
 
+alter table strategy.strategy_evaluations add column if not exists source_snapshot_date date;
+alter table strategy.strategy_evaluations add column if not exists matched_rule_count integer;
+alter table strategy.strategy_evaluations add column if not exists total_rule_count integer;
+alter table strategy.strategy_evaluations add column if not exists support_quality text;
+alter table strategy.strategy_evaluations add column if not exists provenance_note text;
+
 create table if not exists strategy.scenario_outputs (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references core.companies(id) on delete cascade,
@@ -301,6 +315,9 @@ create table if not exists strategy.scenario_outputs (
   explanation text,
   created_at timestamptz not null default now()
 );
+
+alter table strategy.scenario_outputs add column if not exists source_snapshot_date date;
+alter table strategy.scenario_outputs add column if not exists provenance_note text;
 
 create table if not exists strategy.pattern_matches (
   id uuid primary key default gen_random_uuid(),
@@ -400,6 +417,27 @@ create table if not exists admin.data_quality_issues (
   created_at timestamptz not null default now()
 );
 
+create table if not exists admin.filing_documents (
+  id uuid primary key default gen_random_uuid(),
+  source_adapter_id uuid references admin.source_adapters(id) on delete set null,
+  symbol text not null,
+  exchange text not null check (exchange in ('NSE', 'BSE')),
+  source_type text not null,
+  document_kind text not null,
+  status text not null default 'queued',
+  input_path text,
+  ocr_path text,
+  output_path text,
+  normalized_output_path text,
+  error_message text,
+  metadata jsonb not null default '{}'::jsonb,
+  queued_at timestamptz not null default now(),
+  processing_started_at timestamptz,
+  processing_finished_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table user_data.watchlists enable row level security;
 alter table user_data.watchlist_items enable row level security;
 alter table user_data.alerts enable row level security;
@@ -410,6 +448,7 @@ alter table admin.source_runs enable row level security;
 alter table admin.ingestion_jobs enable row level security;
 alter table admin.ingestion_logs enable row level security;
 alter table admin.data_quality_issues enable row level security;
+alter table admin.filing_documents enable row level security;
 
 drop policy if exists "watchlists_select_own" on user_data.watchlists;
 drop policy if exists "watchlists_insert_own" on user_data.watchlists;
@@ -424,6 +463,7 @@ drop policy if exists "admin_source_runs_read" on admin.source_runs;
 drop policy if exists "admin_ingestion_jobs_read" on admin.ingestion_jobs;
 drop policy if exists "admin_ingestion_logs_read" on admin.ingestion_logs;
 drop policy if exists "admin_data_quality_read" on admin.data_quality_issues;
+drop policy if exists "admin_filing_documents_read" on admin.filing_documents;
 
 create policy "watchlists_select_own" on user_data.watchlists
   for select using (auth.uid() = user_id);
@@ -469,6 +509,8 @@ create policy "admin_ingestion_jobs_read" on admin.ingestion_jobs
 create policy "admin_ingestion_logs_read" on admin.ingestion_logs
   for select using (public.is_admin());
 create policy "admin_data_quality_read" on admin.data_quality_issues
+  for select using (public.is_admin());
+create policy "admin_filing_documents_read" on admin.filing_documents
   for select using (public.is_admin());
 
 insert into storage.buckets (id, name, public)
@@ -549,6 +591,8 @@ values
   ('yahoo_finance', 'Yahoo Finance', 'public-unofficial', 'On-demand / EOD refresh')
 on conflict (adapter_key) do nothing;
 
+drop view if exists public.app_stale_symbols;
+drop view if exists public.app_filing_documents;
 drop view if exists public.app_admin_overview;
 drop view if exists public.app_data_quality_issues;
 drop view if exists public.app_source_runs;
@@ -559,6 +603,8 @@ drop view if exists public.app_strategy_evaluations;
 drop view if exists public.app_behavior_snapshot;
 drop view if exists public.app_company_events;
 drop view if exists public.app_company_news;
+drop view if exists public.app_news_entities;
+drop view if exists public.app_corporate_actions;
 drop view if exists public.app_price_levels;
 drop view if exists public.app_technical_snapshot;
 drop view if exists public.app_prices;
@@ -1096,16 +1142,20 @@ on conflict (company_id, event_title, event_date) do update set
 
 insert into analytics.stock_behavior_daily (
   company_id, price_date, momentum_sensitivity, acceleration_score, trend_decay_score,
-  volatility_sensitivity, market_linkage_score, narrative
+  volatility_sensitivity, market_linkage_score, regime_label, macro_regime,
+  market_context_summary, benchmark_symbol, benchmark_return_pct, relative_strength_pct,
+  context_signals, narrative
 )
 select c.id, v.price_date, v.momentum_sensitivity, v.acceleration_score, v.trend_decay_score,
-  v.volatility_sensitivity, v.market_linkage_score, v.narrative
+  v.volatility_sensitivity, v.market_linkage_score, v.regime_label, v.macro_regime,
+  v.market_context_summary, v.benchmark_symbol, v.benchmark_return_pct, v.relative_strength_pct,
+  to_jsonb(v.context_signals::text[]), v.narrative
 from (
   values
-    ('RELIANCE','2026-03-27'::date,71.00,67.00,28.00,56.00,62.00,'Reliance is behaving like a high-liquidity trend stock: market-linked on broad moves, but still capable of company-specific acceleration when consumer or telecom narratives improve.'),
-    ('TCS','2026-03-27'::date,59.00,48.00,24.00,34.00,44.00,'TCS behaves like a stable quality trend: lower noise, slower acceleration, and stronger resilience when broader sentiment gets choppy.'),
-    ('INFY','2026-03-27'::date,55.00,46.00,31.00,39.00,47.00,'Infosys is acting constructive but more selective, with enough momentum support to stay interesting while still depending on execution commentary.')
-) as v(symbol, price_date, momentum_sensitivity, acceleration_score, trend_decay_score, volatility_sensitivity, market_linkage_score, narrative)
+    ('RELIANCE','2026-03-27'::date,71.00,67.00,28.00,56.00,62.00,'Trend-following','Risk-on broad market','The stock is participating in a supportive broad-market tape while still outperforming enough to keep the move partly company-driven.','^NSEI',3.60,2.40,array['Momentum response is firm when the stock starts trending.','Recent price slope is steepening rather than flattening.','Trend decay is contained, which supports persistence.','Broader market direction is still explaining a meaningful part of the move.'],'Reliance is behaving like a high-liquidity trend stock: market-linked on broad moves, but still capable of company-specific acceleration when consumer or telecom narratives improve.'),
+    ('TCS','2026-03-27'::date,59.00,48.00,24.00,34.00,44.00,'Balanced','Range-bound broad market','The stock is holding up in a steadier market tape, with company quality doing more of the work than broad beta alone.','^NSEI',1.10,1.80,array['Momentum behavior is constructive but not aggressive.','Acceleration is measured, so trend continuation may stay slower.','Trend decay is contained, which supports persistence.','Company-specific behavior is carrying more of the tape than index beta alone.'],'TCS behaves like a stable quality trend: lower noise, slower acceleration, and stronger resilience when broader sentiment gets choppy.'),
+    ('INFY','2026-03-27'::date,55.00,46.00,31.00,39.00,47.00,'Balanced','Global-demand sensitive','Infosys is staying constructive in a steadier tape, but benchmark outperformance still depends on execution and demand commentary.','^NSEI',1.10,0.90,array['Momentum is constructive but still selective.','Acceleration remains measured instead of explosive.','Trend decay is contained, though not absent.','The stock is relying on company execution more than pure index beta.'],'Infosys is acting constructive but more selective, with enough momentum support to stay interesting while still depending on execution commentary.')
+) as v(symbol, price_date, momentum_sensitivity, acceleration_score, trend_decay_score, volatility_sensitivity, market_linkage_score, regime_label, macro_regime, market_context_summary, benchmark_symbol, benchmark_return_pct, relative_strength_pct, context_signals, narrative)
 join core.symbols s on s.symbol = v.symbol and s.is_primary = true
 join core.companies c on c.id = s.company_id
 on conflict (company_id, price_date) do update set
@@ -1114,58 +1164,75 @@ on conflict (company_id, price_date) do update set
   trend_decay_score = excluded.trend_decay_score,
   volatility_sensitivity = excluded.volatility_sensitivity,
   market_linkage_score = excluded.market_linkage_score,
+  regime_label = excluded.regime_label,
+  macro_regime = excluded.macro_regime,
+  market_context_summary = excluded.market_context_summary,
+  benchmark_symbol = excluded.benchmark_symbol,
+  benchmark_return_pct = excluded.benchmark_return_pct,
+  relative_strength_pct = excluded.relative_strength_pct,
+  context_signals = excluded.context_signals,
   narrative = excluded.narrative;
 
 insert into strategy.strategy_evaluations (
-  strategy_id, company_id, evaluation_date, matched, confidence_pct, invalidation, support_points, explanation
+  strategy_id, company_id, evaluation_date, matched, confidence_pct, source_snapshot_date,
+  matched_rule_count, total_rule_count, support_quality, provenance_note, invalidation, support_points, explanation
 )
-select sd.id, c.id, v.evaluation_date, v.matched, v.confidence_pct, v.invalidation, to_jsonb(v.support_points::text[]), v.explanation
+select sd.id, c.id, v.evaluation_date, v.matched, v.confidence_pct, v.source_snapshot_date,
+  v.matched_rule_count, v.total_rule_count, v.support_quality, v.provenance_note,
+  v.invalidation, to_jsonb(v.support_points::text[]), v.explanation
 from (
   values
-    ('reliance-industries','trend-continuation','2026-03-27'::date,true,78.00,'Daily close back below 2960 with weakening volume support.','{"Price above 20DMA/50DMA/200DMA","RSI in healthy expansion zone","Breakout volume confirmed"}','This setup matches a continuation structure because the trend is aligned across timeframes and momentum is expanding without a clearly overbought reversal signal.'),
-    ('reliance-industries','breakout-confirmation','2026-03-27'::date,true,72.00,'Failed follow-through and a quick rejection back into the prior base.','{"Fresh swing-high test","Range expansion day","Follow-through watch level is nearby"}','The stock is in the right neighborhood for a breakout confirmation, but the strongest confirmation still depends on holding above resistance after the first thrust.'),
-    ('reliance-industries','mean-reversion-watchlist','2026-03-27'::date,false,29.00,'Not applicable while the stock remains in expansion mode.','{"Momentum is positive","No oversold condition"}','This does not fit a mean-reversion watchlist because the setup is trending rather than washed out.'),
-    ('reliance-industries','quality-plus-momentum','2026-03-27'::date,true,66.00,'Return ratios stall while price underperforms peers.','{"Large-cap quality profile","Improving profitability","Trend alignment remains positive"}','It qualifies as a hybrid quality-plus-momentum candidate, though the quality score is not as clean as software or consumer compounders.'),
-    ('reliance-industries','event-risk-watch','2026-03-27'::date,true,61.00,'Event passes without material guidance change.','{"Earnings window ahead","Narrative-sensitive retail and telecom commentary","Breakout near event zone"}','Upcoming earnings create event sensitivity because the market still needs evidence that consumer and telecom segments are lifting returns fast enough.'),
-    ('tata-consultancy-services','trend-continuation','2026-03-27'::date,true,64.00,'Close below 4250 with weakening relative strength.','{"Price above key moving averages","Measured momentum expansion"}','The trend remains positive, though it is a slower continuation profile than a fast breakout profile.'),
-    ('tata-consultancy-services','breakout-confirmation','2026-03-27'::date,false,41.00,'Not applicable unless a clean range break appears.','{"Approaching resistance but without explosive expansion"}','TCS is nearer to orderly trend continuation than a high-energy breakout confirmation setup.'),
-    ('tata-consultancy-services','mean-reversion-watchlist','2026-03-27'::date,false,18.00,'Not applicable in current trend state.','{"No oversold setup present"}','This is not a mean-reversion candidate because price is not in a stressed or oversold reset.'),
-    ('tata-consultancy-services','quality-plus-momentum','2026-03-27'::date,true,82.00,'Loss of quality narrative or persistent peer underperformance.','{"High ROE and ROCE","Healthy trend alignment","Cash-rich balance sheet"}','TCS is a strong match for quality plus momentum because fundamentals and trend structure are both supportive without requiring a high-risk narrative leap.'),
-    ('tata-consultancy-services','event-risk-watch','2026-03-27'::date,true,58.00,'Event passes with no material guidance surprise.','{"Earnings ahead","Deal commentary sensitivity"}','Results matter because the market still needs confirmation that growth visibility and margin discipline remain intact.'),
-    ('infosys','trend-continuation','2026-03-27'::date,true,57.00,'Close below 1860 while trend breadth weakens.','{"Price above 20DMA and 50DMA","Momentum remains constructive"}','Infosys fits a moderate continuation setup because the trend is positive, but the move is less forceful than stronger leaders.'),
-    ('infosys','breakout-confirmation','2026-03-27'::date,false,44.00,'Not applicable unless price clears the recent shelf decisively.','{"Near local highs","Needs stronger follow-through"}','The stock is close enough to watch for breakout behavior, but the present evidence looks more constructive than explosive.'),
-    ('infosys','mean-reversion-watchlist','2026-03-27'::date,false,22.00,'Not applicable in the current price structure.','{"No oversold reset","Trend still positive"}','Infosys is not in a stressed enough condition to qualify as a mean-reversion setup.'),
-    ('infosys','quality-plus-momentum','2026-03-27'::date,true,69.00,'Execution narrative weakens while the stock loses trend support.','{"Healthy return ratios","Moderate positive trend","Execution consistency improving"}','Infosys fits the hybrid quality-plus-momentum bucket because returns are solid and price behavior is constructive without demanding a heroic narrative.'),
-    ('infosys','event-risk-watch','2026-03-27'::date,true,55.00,'Event passes without a material change in commentary.','{"Result window ahead","Execution and demand commentary matter"}','The next result window matters because investors are still calibrating how much discretionary recovery is really flowing through the book.')
-) as v(company_slug, strategy_slug, evaluation_date, matched, confidence_pct, invalidation, support_points, explanation)
+    ('reliance-industries','trend-continuation','2026-03-27'::date,true,78.00,'2026-03-27'::date,3,3,'strong','Derived from moving-average stack, RSI expansion, and volume confirmation.','Daily close back below 2960 with weakening volume support.','{"Price above 20DMA/50DMA/200DMA","RSI in healthy expansion zone","Breakout volume confirmed"}','This setup matches a continuation structure because the trend is aligned across timeframes and momentum is expanding without a clearly overbought reversal signal.'),
+    ('reliance-industries','breakout-confirmation','2026-03-27'::date,true,72.00,'2026-03-27'::date,3,3,'strong','Derived from breakout participation, short-term trend position, and momentum confirmation.','Failed follow-through and a quick rejection back into the prior base.','{"Fresh swing-high test","Range expansion day","Follow-through watch level is nearby"}','The stock is in the right neighborhood for a breakout confirmation, but the strongest confirmation still depends on holding above resistance after the first thrust.'),
+    ('reliance-industries','mean-reversion-watchlist','2026-03-27'::date,false,29.00,'2026-03-27'::date,0,1,'weak','Driven by oversold reset logic from the latest RSI snapshot.','Not applicable while the stock remains in expansion mode.','{"Momentum is positive","No oversold condition"}','This does not fit a mean-reversion watchlist because the setup is trending rather than washed out.'),
+    ('reliance-industries','quality-plus-momentum','2026-03-27'::date,true,66.00,'2026-03-27'::date,2,2,'strong','Combines return-on-equity quality checks with trend continuation structure.','Return ratios stall while price underperforms peers.','{"Large-cap quality profile","Improving profitability","Trend alignment remains positive"}','It qualifies as a hybrid quality-plus-momentum candidate, though the quality score is not as clean as software or consumer compounders.'),
+    ('reliance-industries','event-risk-watch','2026-03-27'::date,true,61.00,'2026-03-27'::date,1,1,'moderate','Triggered from the upcoming event calendar window in the latest refresh.','Event passes without material guidance change.','{"Earnings window ahead","Narrative-sensitive retail and telecom commentary","Breakout near event zone"}','Upcoming earnings create event sensitivity because the market still needs evidence that consumer and telecom segments are lifting returns fast enough.'),
+    ('tata-consultancy-services','trend-continuation','2026-03-27'::date,true,64.00,'2026-03-27'::date,2,3,'moderate','Derived from moving-average stack and measured momentum expansion.','Close below 4250 with weakening relative strength.','{"Price above key moving averages","Measured momentum expansion"}','The trend remains positive, though it is a slower continuation profile than a fast breakout profile.'),
+    ('tata-consultancy-services','breakout-confirmation','2026-03-27'::date,false,41.00,'2026-03-27'::date,1,3,'weak','Derived from resistance proximity and incomplete breakout participation checks.','Not applicable unless a clean range break appears.','{"Approaching resistance but without explosive expansion"}','TCS is nearer to orderly trend continuation than a high-energy breakout confirmation setup.'),
+    ('tata-consultancy-services','mean-reversion-watchlist','2026-03-27'::date,false,18.00,'2026-03-27'::date,0,1,'weak','Driven by oversold reset logic from the latest RSI snapshot.','Not applicable in current trend state.','{"No oversold setup present"}','This is not a mean-reversion candidate because price is not in a stressed or oversold reset.'),
+    ('tata-consultancy-services','quality-plus-momentum','2026-03-27'::date,true,82.00,'2026-03-27'::date,2,2,'strong','Combines return-on-equity quality checks with trend continuation structure.','Loss of quality narrative or persistent peer underperformance.','{"High ROE and ROCE","Healthy trend alignment","Cash-rich balance sheet"}','TCS is a strong match for quality plus momentum because fundamentals and trend structure are both supportive without requiring a high-risk narrative leap.'),
+    ('tata-consultancy-services','event-risk-watch','2026-03-27'::date,true,58.00,'2026-03-27'::date,1,1,'moderate','Triggered from the upcoming event calendar window in the latest refresh.','Event passes with no material guidance surprise.','{"Earnings ahead","Deal commentary sensitivity"}','Results matter because the market still needs confirmation that growth visibility and margin discipline remain intact.'),
+    ('infosys','trend-continuation','2026-03-27'::date,true,57.00,'2026-03-27'::date,2,3,'moderate','Derived from moving-average alignment and constructive momentum support.','Close below 1860 while trend breadth weakens.','{"Price above 20DMA and 50DMA","Momentum remains constructive"}','Infosys fits a moderate continuation setup because the trend is positive, but the move is less forceful than stronger leaders.'),
+    ('infosys','breakout-confirmation','2026-03-27'::date,false,44.00,'2026-03-27'::date,1,3,'weak','Derived from resistance proximity and incomplete breakout participation checks.','Not applicable unless price clears the recent shelf decisively.','{"Near local highs","Needs stronger follow-through"}','The stock is close enough to watch for breakout behavior, but the present evidence looks more constructive than explosive.'),
+    ('infosys','mean-reversion-watchlist','2026-03-27'::date,false,22.00,'2026-03-27'::date,0,1,'weak','Driven by oversold reset logic from the latest RSI snapshot.','Not applicable in the current price structure.','{"No oversold reset","Trend still positive"}','Infosys is not in a stressed enough condition to qualify as a mean-reversion setup.'),
+    ('infosys','quality-plus-momentum','2026-03-27'::date,true,69.00,'2026-03-27'::date,2,2,'strong','Combines return-quality checks with constructive trend support.','Execution narrative weakens while the stock loses trend support.','{"Healthy return ratios","Moderate positive trend","Execution consistency improving"}','Infosys fits the hybrid quality-plus-momentum bucket because returns are solid and price behavior is constructive without demanding a heroic narrative.'),
+    ('infosys','event-risk-watch','2026-03-27'::date,true,55.00,'2026-03-27'::date,1,1,'moderate','Triggered from the upcoming event calendar window in the latest refresh.','Event passes without a material change in commentary.','{"Result window ahead","Execution and demand commentary matter"}','The next result window matters because investors are still calibrating how much discretionary recovery is really flowing through the book.')
+) as v(company_slug, strategy_slug, evaluation_date, matched, confidence_pct, source_snapshot_date, matched_rule_count, total_rule_count, support_quality, provenance_note, invalidation, support_points, explanation)
 join core.companies c on c.slug = v.company_slug
 join strategy.strategy_definitions sd on sd.slug = v.strategy_slug
 on conflict (strategy_id, company_id, evaluation_date) do update set
   matched = excluded.matched,
   confidence_pct = excluded.confidence_pct,
+  source_snapshot_date = excluded.source_snapshot_date,
+  matched_rule_count = excluded.matched_rule_count,
+  total_rule_count = excluded.total_rule_count,
+  support_quality = excluded.support_quality,
+  provenance_note = excluded.provenance_note,
   invalidation = excluded.invalidation,
   support_points = excluded.support_points,
   explanation = excluded.explanation;
 
 insert into strategy.scenario_outputs (
-  company_id, evaluation_date, stance, title, confidence_pct, trigger_condition, invalidation, payoff_frame, explanation
+  company_id, evaluation_date, stance, title, confidence_pct, source_snapshot_date, provenance_note, trigger_condition, invalidation, payoff_frame, explanation
 )
-select c.id, v.evaluation_date, v.stance, v.title, v.confidence_pct, v.trigger_condition, v.invalidation, v.payoff_frame, v.explanation
+select c.id, v.evaluation_date, v.stance, v.title, v.confidence_pct, v.source_snapshot_date, v.provenance_note, v.trigger_condition, v.invalidation, v.payoff_frame, v.explanation
 from (
   values
-    ('reliance-industries','2026-03-27'::date,'Bullish','Bullish continuation above breakout shelf',74.00,'Sustained closes above 3050 with RSI staying above 60.','Loss of 2960 support on closing basis.','Favors continuation toward the next leg if market breadth stays supportive.','The chart already has strong alignment, so a stable hold above the breakout shelf would convert strength into a cleaner continuation structure.'),
-    ('reliance-industries','2026-03-27'::date,'Neutral','Range reset before the next move',52.00,'Price oscillates between 2960 and 3050 as momentum cools.','Convincing expansion outside the range.','Useful for patience rather than urgency.','This would be a normal digestion outcome after a sharp move, especially if the market pauses near quarter-end.'),
-    ('reliance-industries','2026-03-27'::date,'Bearish','Failed breakout into deeper retest',34.00,'Breakout rejection followed by closes below 2960.','Immediate recovery back above the breakout shelf.','Risk rises because a failed breakout can unwind quickly into the 50DMA zone.','This is lower probability today, but still important because event-driven stocks can reverse hard when the narrative wobbles.'),
-    ('tata-consultancy-services','2026-03-27'::date,'Bullish','Quality continuation after earnings',69.00,'Healthy deal wins and stable margins with price holding above 4250.','Weak guidance and a close below 4190.','Supports a slow-grind continuation profile.','The bullish path depends more on predictability than excitement, which is typical for TCS.'),
-    ('tata-consultancy-services','2026-03-27'::date,'Neutral','Sideways consolidation into results',57.00,'Price stays between 4250 and 4350 ahead of earnings.','Decisive move outside the range.','Favors patience and post-event clarity.','A neutral pause would be normal given the current measured trend slope.'),
-    ('tata-consultancy-services','2026-03-27'::date,'Bearish','Defensive drift lower on soft guidance',31.00,'Guidance softens and price loses 4190 support.','Immediate recovery above the 20DMA after the event.','Would likely be orderly rather than disorderly.','The bearish path is lower probability but still relevant because the stock''s premium multiple depends on trust.'),
-    ('infosys','2026-03-27'::date,'Bullish','Execution-led continuation',64.00,'Constructive results commentary and price holding above 1860.','Close below 1820 after the event.','Supports a steadier continuation rather than a vertical move.','The bullish case relies on execution confidence and steady deal commentary more than on a dramatic rerating impulse.'),
-    ('infosys','2026-03-27'::date,'Neutral','Pause below resistance',55.00,'Price holds between 1860 and 1895 while momentum cools slightly.','Clear directional break outside the band.','Encourages selective patience.','A pause would fit the stock''s current profile because momentum is positive but not extreme.'),
-    ('infosys','2026-03-27'::date,'Bearish','Guidance wobble into trend reset',33.00,'Soft guidance combines with a loss of 1860 support.','Quick recovery above recent highs.','Could pull price back toward the 50DMA zone.','The bearish path is not dominant, but service names can reprice quickly when confidence in execution slips.')
-) as v(company_slug, evaluation_date, stance, title, confidence_pct, trigger_condition, invalidation, payoff_frame, explanation)
+    ('reliance-industries','2026-03-27'::date,'Bullish','Bullish continuation above breakout shelf',74.00,'2026-03-27'::date,'Bullish path is derived from the current trend state and nearest support/resistance structure.','Sustained closes above 3050 with RSI staying above 60.','Loss of 2960 support on closing basis.','Favors continuation toward the next leg if market breadth stays supportive.','The chart already has strong alignment, so a stable hold above the breakout shelf would convert strength into a cleaner continuation structure.'),
+    ('reliance-industries','2026-03-27'::date,'Neutral','Range reset before the next move',52.00,'2026-03-27'::date,'Neutral path comes from consolidation logic around the current support shelf and resistance cap.','Price oscillates between 2960 and 3050 as momentum cools.','Convincing expansion outside the range.','Useful for patience rather than urgency.','This would be a normal digestion outcome after a sharp move, especially if the market pauses near quarter-end.'),
+    ('reliance-industries','2026-03-27'::date,'Bearish','Failed breakout into deeper retest',34.00,'2026-03-27'::date,'Bearish path is anchored to a failed-hold scenario at the current support shelf.','Breakout rejection followed by closes below 2960.','Immediate recovery back above the breakout shelf.','Risk rises because a failed breakout can unwind quickly into the 50DMA zone.','This is lower probability today, but still important because event-driven stocks can reverse hard when the narrative wobbles.'),
+    ('tata-consultancy-services','2026-03-27'::date,'Bullish','Quality continuation after earnings',69.00,'2026-03-27'::date,'Bullish path is derived from the current trend state and nearest support/resistance structure.','Healthy deal wins and stable margins with price holding above 4250.','Weak guidance and a close below 4190.','Supports a slow-grind continuation profile.','The bullish path depends more on predictability than excitement, which is typical for TCS.'),
+    ('tata-consultancy-services','2026-03-27'::date,'Neutral','Sideways consolidation into results',57.00,'2026-03-27'::date,'Neutral path comes from consolidation logic around the current support shelf and resistance cap.','Price stays between 4250 and 4350 ahead of earnings.','Decisive move outside the range.','Favors patience and post-event clarity.','A neutral pause would be normal given the current measured trend slope.'),
+    ('tata-consultancy-services','2026-03-27'::date,'Bearish','Defensive drift lower on soft guidance',31.00,'2026-03-27'::date,'Bearish path is anchored to a failed-hold scenario at the current support shelf.','Guidance softens and price loses 4190 support.','Immediate recovery above the 20DMA after the event.','Would likely be orderly rather than disorderly.','The bearish path is lower probability but still relevant because the stock''s premium multiple depends on trust.'),
+    ('infosys','2026-03-27'::date,'Bullish','Execution-led continuation',64.00,'2026-03-27'::date,'Bullish path is derived from the current trend state and nearest support/resistance structure.','Constructive results commentary and price holding above 1860.','Close below 1820 after the event.','Supports a steadier continuation rather than a vertical move.','The bullish case relies on execution confidence and steady deal commentary more than on a dramatic rerating impulse.'),
+    ('infosys','2026-03-27'::date,'Neutral','Pause below resistance',55.00,'2026-03-27'::date,'Neutral path comes from consolidation logic around the current support shelf and resistance cap.','Price holds between 1860 and 1895 while momentum cools slightly.','Clear directional break outside the band.','Encourages selective patience.','A pause would fit the stock''s current profile because momentum is positive but not extreme.'),
+    ('infosys','2026-03-27'::date,'Bearish','Guidance wobble into trend reset',33.00,'2026-03-27'::date,'Bearish path is anchored to a failed-hold scenario at the current support shelf.','Soft guidance combines with a loss of 1860 support.','Quick recovery above recent highs.','Could pull price back toward the 50DMA zone.','The bearish path is not dominant, but service names can reprice quickly when confidence in execution slips.')
+) as v(company_slug, evaluation_date, stance, title, confidence_pct, source_snapshot_date, provenance_note, trigger_condition, invalidation, payoff_frame, explanation)
 join core.companies c on c.slug = v.company_slug
 on conflict (company_id, evaluation_date, stance, title) do update set
   confidence_pct = excluded.confidence_pct,
+  source_snapshot_date = excluded.source_snapshot_date,
+  provenance_note = excluded.provenance_note,
   trigger_condition = excluded.trigger_condition,
   invalidation = excluded.invalidation,
   payoff_frame = excluded.payoff_frame,
@@ -1459,6 +1526,16 @@ select
 from market.price_levels pl
 join core.symbols s on s.company_id = pl.company_id and s.is_primary = true;
 
+create or replace view public.app_corporate_actions as
+select
+  s.symbol,
+  ca.id,
+  ca.action_type,
+  ca.action_date,
+  ca.details
+from market.corporate_actions ca
+join core.symbols s on s.company_id = ca.company_id and s.is_primary = true;
+
 create or replace view public.app_company_news as
 select
   s.symbol,
@@ -1472,9 +1549,37 @@ select
   snl.sentiment,
   snl.why_it_matters,
   na.summary,
-  na.canonical_url
+  na.canonical_url,
+  coalesce(
+    (
+      select jsonb_agg(
+        jsonb_build_object(
+          'entityType', ne.entity_type,
+          'entityName', ne.entity_name,
+          'relevanceScore', ne.relevance_score
+        )
+        order by ne.relevance_score desc nulls last, ne.entity_name
+      )
+      from news.news_entities ne
+      where ne.news_article_id = na.id
+    ),
+    '[]'::jsonb
+  ) as entities
 from news.stock_news_links snl
 join news.news_articles na on na.id = snl.news_article_id
+join core.symbols s on s.company_id = snl.company_id and s.is_primary = true;
+
+create or replace view public.app_news_entities as
+select
+  s.symbol,
+  ne.news_article_id,
+  ne.id,
+  ne.entity_type,
+  ne.entity_name,
+  ne.relevance_score,
+  ne.created_at
+from news.news_entities ne
+join news.stock_news_links snl on snl.news_article_id = ne.news_article_id
 join core.symbols s on s.company_id = snl.company_id and s.is_primary = true;
 
 create or replace view public.app_company_events as
@@ -1492,7 +1597,14 @@ create or replace view public.app_behavior_snapshot as
 select
   s.symbol,
   bd.price_date,
+  bd.regime_label,
+  bd.macro_regime,
   bd.narrative,
+  bd.market_context_summary,
+  bd.benchmark_symbol,
+  bd.benchmark_return_pct,
+  bd.relative_strength_pct,
+  bd.context_signals,
   bd.momentum_sensitivity,
   bd.acceleration_score,
   bd.trend_decay_score,
@@ -1511,6 +1623,11 @@ select
   se.evaluation_date,
   se.matched,
   se.confidence_pct,
+  se.source_snapshot_date,
+  se.matched_rule_count,
+  se.total_rule_count,
+  se.support_quality,
+  se.provenance_note,
   se.invalidation,
   se.support_points,
   se.explanation
@@ -1526,6 +1643,8 @@ select
   so.stance,
   so.title,
   so.confidence_pct,
+  so.source_snapshot_date,
+  so.provenance_note,
   so.trigger_condition,
   so.invalidation,
   so.payoff_frame,
@@ -1633,6 +1752,63 @@ cross join job_counts jc
 cross join issue_counts ic
 cross join activity;
 
+create or replace view public.app_stale_symbols as
+with latest_snapshots as (
+  select distinct on (cs.company_id)
+    cs.company_id,
+    cs.snapshot_date
+  from analytics.company_snapshots_daily cs
+  order by cs.company_id, cs.snapshot_date desc
+)
+select
+  c.id as company_id,
+  c.display_name as company_name,
+  s.exchange,
+  s.symbol,
+  ls.snapshot_date,
+  case
+    when ls.snapshot_date is null then null
+    else greatest((current_date - ls.snapshot_date), 0)
+  end as snapshot_age_days,
+  case
+    when ls.snapshot_date is null then 'missing'
+    when ls.snapshot_date < current_date - 5 then 'stale'
+    else 'fresh'
+  end as status,
+  case
+    when ls.snapshot_date is null then 'No stored overview snapshot exists for this primary symbol yet.'
+    when ls.snapshot_date < current_date - 5 then format('Latest stored snapshot is %s days old.', greatest((current_date - ls.snapshot_date), 0))
+    else 'Snapshot is within the current freshness window.'
+  end as note
+from core.symbols s
+join core.companies c on c.id = s.company_id
+left join latest_snapshots ls on ls.company_id = c.id
+where s.is_primary = true
+  and (ls.snapshot_date is null or ls.snapshot_date < current_date - 5);
+
+create or replace view public.app_filing_documents as
+select
+  fd.id,
+  coalesce(sa.label, 'Unknown source') as source,
+  fd.symbol,
+  fd.exchange,
+  fd.source_type,
+  fd.document_kind,
+  fd.status,
+  fd.input_path,
+  fd.ocr_path,
+  fd.output_path,
+  fd.normalized_output_path,
+  fd.error_message,
+  fd.metadata,
+  fd.queued_at,
+  fd.processing_started_at,
+  fd.processing_finished_at,
+  fd.created_at,
+  fd.updated_at
+from admin.filing_documents fd
+left join admin.source_adapters sa on sa.id = fd.source_adapter_id;
+
 grant select on public.app_stock_overview to anon, authenticated, service_role;
 grant select on public.app_financials_yearly to anon, authenticated, service_role;
 grant select on public.app_financials_quarterly to anon, authenticated, service_role;
@@ -1643,7 +1819,9 @@ grant select on public.app_peer_comparison to anon, authenticated, service_role;
 grant select on public.app_prices to anon, authenticated, service_role;
 grant select on public.app_technical_snapshot to anon, authenticated, service_role;
 grant select on public.app_price_levels to anon, authenticated, service_role;
+grant select on public.app_corporate_actions to anon, authenticated, service_role;
 grant select on public.app_company_news to anon, authenticated, service_role;
+grant select on public.app_news_entities to anon, authenticated, service_role;
 grant select on public.app_company_events to anon, authenticated, service_role;
 grant select on public.app_behavior_snapshot to anon, authenticated, service_role;
 grant select on public.app_strategy_evaluations to anon, authenticated, service_role;
@@ -1653,6 +1831,707 @@ grant select on public.app_ingestion_jobs to anon, authenticated, service_role;
 grant select on public.app_source_runs to anon, authenticated, service_role;
 grant select on public.app_data_quality_issues to anon, authenticated, service_role;
 grant select on public.app_admin_overview to anon, authenticated, service_role;
+grant select on public.app_stale_symbols to anon, authenticated, service_role;
+grant select on public.app_filing_documents to anon, authenticated, service_role;
+
+create or replace function public.app_run_freshness_audit(stale_after_days integer default 5)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, core, analytics, admin
+as $$
+declare
+  v_started_at timestamptz := now();
+  v_finished_at timestamptz := now();
+  v_platform_adapter_id uuid;
+  v_issue_count integer := 0;
+  v_resolved_count integer := 0;
+  stale_row record;
+begin
+  insert into admin.source_adapters (adapter_key, label, source_type, freshness_expectation, active)
+  values ('platform_audit', 'Platform Audit', 'internal', 'Daily platform audit', true)
+  on conflict (adapter_key) do update set
+    label = excluded.label,
+    source_type = excluded.source_type,
+    freshness_expectation = excluded.freshness_expectation,
+    active = true
+  returning id into v_platform_adapter_id;
+
+  insert into admin.source_runs (source_adapter_id, started_at, finished_at, status, detail)
+  values (
+    v_platform_adapter_id,
+    v_started_at,
+    v_finished_at,
+    'healthy',
+    format('Freshness audit evaluated primary symbols with a stale threshold of %s days.', stale_after_days)
+  )
+  on conflict (source_adapter_id, started_at) do update set
+    finished_at = excluded.finished_at,
+    status = excluded.status,
+    detail = excluded.detail;
+
+  insert into admin.ingestion_jobs (source_adapter_id, target_table, status, started_at, finished_at, note)
+  values (
+    v_platform_adapter_id,
+    'platform.freshness_audit',
+    'success',
+    v_started_at,
+    v_finished_at,
+    format('Freshness audit started with stale threshold %s days.', stale_after_days)
+  )
+  on conflict (source_adapter_id, target_table, started_at) do update set
+    status = excluded.status,
+    finished_at = excluded.finished_at,
+    note = excluded.note;
+
+  update admin.data_quality_issues
+  set resolved = true
+  where resolved = false
+    and issue_type in ('missing-snapshot', 'stale-snapshot');
+
+  get diagnostics v_resolved_count = row_count;
+
+  for stale_row in
+    with latest_snapshots as (
+      select distinct on (cs.company_id)
+        cs.company_id,
+        cs.snapshot_date
+      from analytics.company_snapshots_daily cs
+      order by cs.company_id, cs.snapshot_date desc
+    )
+    select
+      c.id as company_id,
+      c.display_name as company_name,
+      s.exchange,
+      s.symbol,
+      ls.snapshot_date
+    from core.symbols s
+    join core.companies c on c.id = s.company_id
+    left join latest_snapshots ls on ls.company_id = c.id
+    where s.is_primary = true
+      and (
+        ls.snapshot_date is null
+        or ls.snapshot_date < current_date - stale_after_days
+      )
+  loop
+    insert into admin.data_quality_issues (source_adapter_id, issue_type, detail, resolved, created_at)
+    values (
+      v_platform_adapter_id,
+      case when stale_row.snapshot_date is null then 'missing-snapshot' else 'stale-snapshot' end,
+      case
+        when stale_row.snapshot_date is null
+          then format('Primary symbol %s:%s has no stored overview snapshot yet.', stale_row.exchange, stale_row.symbol)
+        else format(
+          'Primary symbol %s:%s is stale. Latest stored snapshot date is %s.',
+          stale_row.exchange,
+          stale_row.symbol,
+          stale_row.snapshot_date
+        )
+      end,
+      false,
+      now()
+    );
+    v_issue_count := v_issue_count + 1;
+  end loop;
+
+  insert into admin.ingestion_logs (ingestion_job_id, log_level, message, payload)
+  select
+    ij.id,
+    case when v_issue_count > 0 then 'warning' else 'info' end,
+    'Freshness audit completed.',
+    jsonb_build_object(
+      'staleAfterDays', stale_after_days,
+      'issuesCreated', v_issue_count,
+      'issuesResolved', v_resolved_count
+    )
+  from admin.ingestion_jobs ij
+  where ij.source_adapter_id = v_platform_adapter_id
+    and ij.target_table = 'platform.freshness_audit'
+    and ij.started_at = v_started_at
+  limit 1;
+
+  return jsonb_build_object(
+    'staleAfterDays', stale_after_days,
+    'issuesCreated', v_issue_count,
+    'issuesResolved', v_resolved_count
+  );
+end;
+$$;
+
+grant execute on function public.app_run_freshness_audit(integer) to service_role;
+
+create or replace function public.app_queue_daily_refresh(run_date date default current_date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, admin
+as $$
+declare
+  v_started_at timestamptz := now();
+  v_nse_adapter_id uuid;
+  v_bse_adapter_id uuid;
+  queued_count integer := 0;
+begin
+  select id into v_nse_adapter_id from admin.source_adapters where adapter_key = 'nse_eod' limit 1;
+  select id into v_bse_adapter_id from admin.source_adapters where adapter_key = 'bse_bhavcopy' limit 1;
+
+  if v_nse_adapter_id is not null then
+    insert into admin.ingestion_jobs (source_adapter_id, target_table, status, started_at, note)
+    values
+      (v_nse_adapter_id, 'core.security_master.nse', 'queued', v_started_at, format('Queued NSE security master refresh for %s.', run_date)),
+      (v_nse_adapter_id, 'market.ohlcv_daily.nse', 'queued', v_started_at, format('Queued NSE EOD market-data refresh for %s.', run_date))
+    on conflict (source_adapter_id, target_table, started_at) do nothing;
+    queued_count := queued_count + 2;
+  end if;
+
+  if v_bse_adapter_id is not null then
+    insert into admin.ingestion_jobs (source_adapter_id, target_table, status, started_at, note)
+    values
+      (v_bse_adapter_id, 'core.security_master.bse', 'queued', v_started_at, format('Queued BSE security master refresh for %s.', run_date)),
+      (v_bse_adapter_id, 'market.ohlcv_daily.bse', 'queued', v_started_at, format('Queued BSE EOD market-data refresh for %s.', run_date))
+    on conflict (source_adapter_id, target_table, started_at) do nothing;
+    queued_count := queued_count + 2;
+  end if;
+
+  return jsonb_build_object(
+    'runDate', run_date,
+    'queuedJobs', queued_count
+  );
+end;
+$$;
+
+grant execute on function public.app_queue_daily_refresh(date) to service_role;
+
+create or replace function public.app_queue_filing_document(payload jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, admin
+as $$
+declare
+  v_adapter_key text := coalesce(payload->>'adapterKey', 'mca_filings');
+  v_adapter_label text := coalesce(payload->>'adapterLabel', 'MCA Filings');
+  v_source_type text := coalesce(payload->>'sourceType', 'official');
+  v_freshness text := coalesce(payload->>'freshnessExpectation', 'Filing-driven');
+  v_symbol text := upper(coalesce(payload->>'symbol', ''));
+  v_exchange text := upper(coalesce(payload->>'exchange', 'NSE'));
+  v_document_kind text := coalesce(payload->>'documentKind', 'filing');
+  v_parser_source_type text := coalesce(payload->>'parserSourceType', 'annual-report-ocr');
+  v_input_path text := nullif(payload->>'inputPath', '');
+  v_ocr_path text := nullif(payload->>'ocrPath', '');
+  v_output_path text := nullif(payload->>'outputPath', '');
+  v_normalized_output_path text := nullif(payload->>'normalizedOutputPath', '');
+  v_source_adapter_id uuid;
+  v_document_id uuid;
+  v_metadata jsonb := coalesce(payload->'metadata', '{}'::jsonb);
+begin
+  if v_symbol = '' then
+    raise exception 'symbol is required';
+  end if;
+
+  if v_exchange not in ('NSE', 'BSE') then
+    v_exchange := 'NSE';
+  end if;
+
+  insert into admin.source_adapters (adapter_key, label, source_type, freshness_expectation, active)
+  values (v_adapter_key, v_adapter_label, v_source_type, v_freshness, true)
+  on conflict (adapter_key) do update set
+    label = excluded.label,
+    source_type = excluded.source_type,
+    freshness_expectation = excluded.freshness_expectation,
+    active = true
+  returning id into v_source_adapter_id;
+
+  insert into admin.filing_documents (
+    source_adapter_id, symbol, exchange, source_type, document_kind, status,
+    input_path, ocr_path, output_path, normalized_output_path, metadata
+  )
+  values (
+    v_source_adapter_id,
+    v_symbol,
+    v_exchange,
+    v_parser_source_type,
+    v_document_kind,
+    'queued',
+    v_input_path,
+    v_ocr_path,
+    v_output_path,
+    v_normalized_output_path,
+    v_metadata
+  )
+  returning id into v_document_id;
+
+  insert into admin.ingestion_jobs (source_adapter_id, target_table, status, started_at, note)
+  values (
+    v_source_adapter_id,
+    'documents.' || lower(v_symbol) || '.' || replace(v_document_kind, ' ', '-'),
+    'queued',
+    now(),
+    format('Queued %s document for %s:%s.', v_document_kind, v_exchange, v_symbol)
+  );
+
+  return jsonb_build_object(
+    'documentId', v_document_id,
+    'symbol', v_symbol,
+    'exchange', v_exchange,
+    'status', 'queued'
+  );
+end;
+$$;
+
+grant execute on function public.app_queue_filing_document(jsonb) to service_role;
+
+create or replace function public.app_claim_filing_documents(limit_count integer default 5)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, admin
+as $$
+declare
+  claimed_ids uuid[];
+begin
+  with candidates as (
+    select fd.id
+    from admin.filing_documents fd
+    where fd.status = 'queued'
+    order by fd.queued_at asc
+    limit limit_count
+    for update skip locked
+  ),
+  updated as (
+    update admin.filing_documents fd
+    set
+      status = 'processing',
+      processing_started_at = now(),
+      updated_at = now()
+    where fd.id in (select id from candidates)
+    returning fd.id
+  )
+  select array_agg(id) into claimed_ids from updated;
+
+  return coalesce((
+    select jsonb_agg(
+      jsonb_build_object(
+        'id', fd.id,
+        'source', coalesce(sa.label, 'Unknown source'),
+        'symbol', fd.symbol,
+        'exchange', fd.exchange,
+        'sourceType', fd.source_type,
+        'documentKind', fd.document_kind,
+        'inputPath', fd.input_path,
+        'ocrPath', fd.ocr_path,
+        'outputPath', fd.output_path,
+        'normalizedOutputPath', fd.normalized_output_path,
+        'metadata', fd.metadata
+      )
+    )
+    from admin.filing_documents fd
+    left join admin.source_adapters sa on sa.id = fd.source_adapter_id
+    where claimed_ids is not null
+      and fd.id = any(claimed_ids)
+  ), '[]'::jsonb);
+end;
+$$;
+
+grant execute on function public.app_claim_filing_documents(integer) to service_role;
+
+create or replace function public.app_complete_filing_document(
+  document_id uuid,
+  final_status text,
+  result_payload jsonb default '{}'::jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, admin
+as $$
+declare
+  v_document admin.filing_documents%rowtype;
+  v_output_path text := nullif(result_payload->>'outputPath', '');
+  v_normalized_output_path text := nullif(result_payload->>'normalizedOutputPath', '');
+  v_error_message text := nullif(result_payload->>'errorMessage', '');
+  v_push_status text := coalesce(result_payload->>'pushStatus', '');
+begin
+  update admin.filing_documents
+  set
+    status = final_status,
+    output_path = coalesce(v_output_path, output_path),
+    normalized_output_path = coalesce(v_normalized_output_path, normalized_output_path),
+    error_message = coalesce(v_error_message, error_message),
+    processing_finished_at = now(),
+    updated_at = now(),
+    metadata = metadata || coalesce(result_payload, '{}'::jsonb)
+  where id = document_id
+  returning * into v_document;
+
+  if not found then
+    raise exception 'document not found';
+  end if;
+
+  update admin.ingestion_jobs
+  set
+    status = case
+      when final_status = 'completed' and v_push_status <> 'failed' then 'success'
+      when final_status = 'failed' or v_push_status = 'failed' then 'warning'
+      else status
+    end,
+    finished_at = now(),
+    note = case
+      when final_status = 'completed'
+        then format('Processed %s document for %s:%s.', v_document.document_kind, v_document.exchange, v_document.symbol)
+      else coalesce(v_error_message, format('Processing failed for %s:%s.', v_document.exchange, v_document.symbol))
+    end
+  where source_adapter_id = v_document.source_adapter_id
+    and target_table = 'documents.' || lower(v_document.symbol) || '.' || replace(v_document.document_kind, ' ', '-')
+    and status in ('queued', 'running', 'warning');
+
+  insert into admin.ingestion_logs (ingestion_job_id, log_level, message, payload)
+  select
+    ij.id,
+    case when final_status = 'completed' and v_push_status <> 'failed' then 'info' else 'warning' end,
+    case
+      when final_status = 'completed' then 'Document processing completed.'
+      else 'Document processing failed.'
+    end,
+    result_payload
+  from admin.ingestion_jobs ij
+  where ij.source_adapter_id = v_document.source_adapter_id
+    and ij.target_table = 'documents.' || lower(v_document.symbol) || '.' || replace(v_document.document_kind, ' ', '-')
+  order by ij.started_at desc
+  limit 1;
+
+  return jsonb_build_object(
+    'documentId', document_id,
+    'status', final_status
+  );
+end;
+$$;
+
+grant execute on function public.app_complete_filing_document(uuid, text, jsonb) to service_role;
+
+create or replace function public.app_ingest_fundamentals_payload(payload jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, core, fundamentals, analytics, admin
+as $$
+declare
+  source_payload jsonb := coalesce(payload->'source', '{}'::jsonb);
+  record_item jsonb;
+  item jsonb;
+  peer_symbol_item text;
+  v_adapter_key text := coalesce(source_payload->>'adapterKey', 'mca_filings');
+  v_adapter_label text := coalesce(source_payload->>'adapterLabel', 'MCA Filings');
+  v_source_type text := coalesce(source_payload->>'sourceType', 'official');
+  v_freshness text := coalesce(source_payload->>'freshnessExpectation', 'Quarterly / filing-driven');
+  v_default_exchange text := upper(coalesce(source_payload->>'exchange', 'NSE'));
+  v_started_at timestamptz := coalesce(nullif(source_payload->>'startedAt', '')::timestamptz, now());
+  v_finished_at timestamptz := coalesce(nullif(source_payload->>'finishedAt', '')::timestamptz, now());
+  v_status text := coalesce(source_payload->>'status', 'healthy');
+  v_detail text := coalesce(source_payload->>'detail', 'Fundamentals refresh completed.');
+  v_source_adapter_id uuid;
+  v_ingestion_job_id uuid;
+  v_company_id uuid;
+  v_symbol text;
+  v_exchange text;
+  v_as_of_date date;
+  v_headline text;
+  v_peer_group_id uuid;
+  inserted_count integer := 0;
+  skipped_count integer := 0;
+begin
+  if v_default_exchange not in ('NSE', 'BSE') then
+    v_default_exchange := 'NSE';
+  end if;
+
+  insert into admin.source_adapters (adapter_key, label, source_type, freshness_expectation, active)
+  values (v_adapter_key, v_adapter_label, v_source_type, v_freshness, true)
+  on conflict (adapter_key) do update set
+    label = excluded.label,
+    source_type = excluded.source_type,
+    freshness_expectation = excluded.freshness_expectation,
+    active = true
+  returning id into v_source_adapter_id;
+
+  insert into admin.source_runs (source_adapter_id, started_at, finished_at, status, detail)
+  values (v_source_adapter_id, v_started_at, v_finished_at, v_status, v_detail)
+  on conflict (source_adapter_id, started_at) do update set
+    finished_at = excluded.finished_at,
+    status = excluded.status,
+    detail = excluded.detail;
+
+  insert into admin.ingestion_jobs (source_adapter_id, target_table, status, started_at, finished_at, note)
+  values (
+    v_source_adapter_id,
+    'fundamentals.financial_statements_yearly',
+    case when v_status in ('healthy', 'success') then 'success' else 'warning' end,
+    v_started_at,
+    v_finished_at,
+    v_detail
+  )
+  on conflict (source_adapter_id, target_table, started_at) do update set
+    status = excluded.status,
+    finished_at = excluded.finished_at,
+    note = excluded.note
+  returning id into v_ingestion_job_id;
+
+  for record_item in
+    select value from jsonb_array_elements(coalesce(payload->'records', '[]'::jsonb))
+  loop
+    v_symbol := upper(btrim(coalesce(record_item->>'symbol', '')));
+    v_exchange := upper(btrim(coalesce(record_item->>'exchange', v_default_exchange)));
+    v_as_of_date := coalesce(nullif(record_item->>'asOfDate', '')::date, current_date);
+
+    if v_symbol = '' then
+      skipped_count := skipped_count + 1;
+      continue;
+    end if;
+
+    if v_exchange not in ('NSE', 'BSE') then
+      v_exchange := v_default_exchange;
+    end if;
+
+    select s.company_id
+    into v_company_id
+    from core.symbols s
+    where s.exchange = v_exchange
+      and s.symbol = v_symbol
+    limit 1;
+
+    if v_company_id is null then
+      skipped_count := skipped_count + 1;
+      insert into admin.data_quality_issues (source_adapter_id, issue_type, detail, resolved)
+      values (
+        v_source_adapter_id,
+        'unknown-symbol',
+        format('No company found for %s:%s during fundamentals import.', v_exchange, v_symbol),
+        false
+      );
+      continue;
+    end if;
+
+    for item in
+      select value from jsonb_array_elements(coalesce(record_item->'yearlyFinancials', '[]'::jsonb))
+    loop
+      insert into fundamentals.financial_statements_yearly (
+        company_id, fiscal_year, revenue_cr, ebitda_cr, pat_cr, operating_cash_flow_cr, filing_source,
+        raw_payload, ebitda_margin_pct, pat_margin_pct, roe_pct, roce_pct, net_debt_to_ebitda
+      )
+      values (
+        v_company_id,
+        item->>'period',
+        nullif(item->>'revenueCr', '')::numeric,
+        nullif(item->>'ebitdaCr', '')::numeric,
+        nullif(item->>'patCr', '')::numeric,
+        nullif(item->>'operatingCashFlowCr', '')::numeric,
+        coalesce(item->>'filingSource', v_adapter_key),
+        item,
+        nullif(item->>'ebitdaMarginPct', '')::numeric,
+        nullif(item->>'patMarginPct', '')::numeric,
+        nullif(item->>'roePct', '')::numeric,
+        nullif(item->>'rocePct', '')::numeric,
+        nullif(item->>'netDebtToEbitda', '')::numeric
+      )
+      on conflict (company_id, fiscal_year) do update set
+        revenue_cr = excluded.revenue_cr,
+        ebitda_cr = excluded.ebitda_cr,
+        pat_cr = excluded.pat_cr,
+        operating_cash_flow_cr = excluded.operating_cash_flow_cr,
+        filing_source = excluded.filing_source,
+        raw_payload = excluded.raw_payload,
+        ebitda_margin_pct = excluded.ebitda_margin_pct,
+        pat_margin_pct = excluded.pat_margin_pct,
+        roe_pct = excluded.roe_pct,
+        roce_pct = excluded.roce_pct,
+        net_debt_to_ebitda = excluded.net_debt_to_ebitda;
+    end loop;
+
+    for item in
+      select value from jsonb_array_elements(coalesce(record_item->'quarterlyFinancials', '[]'::jsonb))
+    loop
+      insert into fundamentals.financial_statements_quarterly (
+        company_id, fiscal_quarter, revenue_cr, ebitda_cr, pat_cr, raw_payload,
+        ebitda_margin_pct, pat_margin_pct, roe_pct, roce_pct, net_debt_to_ebitda
+      )
+      values (
+        v_company_id,
+        item->>'period',
+        nullif(item->>'revenueCr', '')::numeric,
+        nullif(item->>'ebitdaCr', '')::numeric,
+        nullif(item->>'patCr', '')::numeric,
+        item,
+        nullif(item->>'ebitdaMarginPct', '')::numeric,
+        nullif(item->>'patMarginPct', '')::numeric,
+        nullif(item->>'roePct', '')::numeric,
+        nullif(item->>'rocePct', '')::numeric,
+        nullif(item->>'netDebtToEbitda', '')::numeric
+      )
+      on conflict (company_id, fiscal_quarter) do update set
+        revenue_cr = excluded.revenue_cr,
+        ebitda_cr = excluded.ebitda_cr,
+        pat_cr = excluded.pat_cr,
+        raw_payload = excluded.raw_payload,
+        ebitda_margin_pct = excluded.ebitda_margin_pct,
+        pat_margin_pct = excluded.pat_margin_pct,
+        roe_pct = excluded.roe_pct,
+        roce_pct = excluded.roce_pct,
+        net_debt_to_ebitda = excluded.net_debt_to_ebitda;
+    end loop;
+
+    if record_item ? 'ratios' then
+      insert into fundamentals.financial_ratios (
+        company_id, as_of_date, roe_pct, roce_pct, ebitda_margin_pct, pat_margin_pct,
+        net_debt_to_ebitda, pe_ratio, pb_ratio, revenue_growth_pct
+      )
+      values (
+        v_company_id,
+        v_as_of_date,
+        nullif(record_item->'ratios'->>'roePct', '')::numeric,
+        nullif(record_item->'ratios'->>'rocePct', '')::numeric,
+        nullif(record_item->'ratios'->>'ebitdaMarginPct', '')::numeric,
+        nullif(record_item->'ratios'->>'patMarginPct', '')::numeric,
+        nullif(record_item->'ratios'->>'netDebtToEbitda', '')::numeric,
+        nullif(record_item->'ratios'->>'peRatio', '')::numeric,
+        nullif(record_item->'ratios'->>'pbRatio', '')::numeric,
+        nullif(record_item->'ratios'->>'revenueGrowthPct', '')::numeric
+      )
+      on conflict (company_id, as_of_date) do update set
+        roe_pct = excluded.roe_pct,
+        roce_pct = excluded.roce_pct,
+        ebitda_margin_pct = excluded.ebitda_margin_pct,
+        pat_margin_pct = excluded.pat_margin_pct,
+        net_debt_to_ebitda = excluded.net_debt_to_ebitda,
+        pe_ratio = excluded.pe_ratio,
+        pb_ratio = excluded.pb_ratio,
+        revenue_growth_pct = excluded.revenue_growth_pct;
+    end if;
+
+    for item in
+      select value from jsonb_array_elements(coalesce(record_item->'segmentMix', '[]'::jsonb))
+    loop
+      insert into fundamentals.segment_revenues (company_id, as_of_period, segment_name, revenue_share_pct)
+      values (
+        v_company_id,
+        coalesce(item->>'asOfPeriod', coalesce(record_item->>'segmentAsOfPeriod', 'TTM')),
+        item->>'label',
+        coalesce((item->>'valuePct')::numeric, 0)
+      )
+      on conflict (company_id, as_of_period, segment_name) do update set
+        revenue_share_pct = excluded.revenue_share_pct;
+    end loop;
+
+    for item in
+      select value from jsonb_array_elements(coalesce(record_item->'geographyMix', '[]'::jsonb))
+    loop
+      insert into fundamentals.geo_revenues (company_id, as_of_period, geography_name, revenue_share_pct)
+      values (
+        v_company_id,
+        coalesce(item->>'asOfPeriod', coalesce(record_item->>'geographyAsOfPeriod', 'TTM')),
+        item->>'label',
+        coalesce((item->>'valuePct')::numeric, 0)
+      )
+      on conflict (company_id, as_of_period, geography_name) do update set
+        revenue_share_pct = excluded.revenue_share_pct;
+    end loop;
+
+    for item in
+      select value from jsonb_array_elements(coalesce(record_item->'businessNotes', '[]'::jsonb))
+    loop
+      insert into fundamentals.business_notes (company_id, source_kind, source_url, note, source_excerpt)
+      values (
+        v_company_id,
+        coalesce(item->>'sourceKind', v_adapter_key),
+        nullif(item->>'sourceUrl', ''),
+        item->>'note',
+        item->>'sourceExcerpt'
+      )
+      on conflict (company_id, source_kind, note) do update set
+        source_url = excluded.source_url,
+        source_excerpt = excluded.source_excerpt;
+    end loop;
+
+    if nullif(record_item->>'peerGroupSlug', '') is not null then
+      insert into fundamentals.peer_groups (slug, label)
+      values (
+        record_item->>'peerGroupSlug',
+        coalesce(record_item->>'peerGroupLabel', record_item->>'peerGroupSlug')
+      )
+      on conflict (slug) do update set
+        label = excluded.label
+      returning id into v_peer_group_id;
+
+      insert into fundamentals.peer_group_members (peer_group_id, company_id)
+      values (v_peer_group_id, v_company_id)
+      on conflict do nothing;
+
+      for peer_symbol_item in
+        select value from jsonb_array_elements_text(coalesce(record_item->'peerMembers', '[]'::jsonb))
+      loop
+        insert into fundamentals.peer_group_members (peer_group_id, company_id)
+        select v_peer_group_id, s.company_id
+        from core.symbols s
+        where s.symbol = upper(peer_symbol_item)
+          and s.is_primary = true
+        on conflict do nothing;
+      end loop;
+    end if;
+
+    select trim(both ' ' from concat_ws(
+      ' ',
+      case
+        when record_item ? 'ratios' and nullif(record_item->'ratios'->>'revenueGrowthPct', '') is not null
+          then 'Revenue growth ' || (record_item->'ratios'->>'revenueGrowthPct') || '%.'
+        else null
+      end,
+      case
+        when record_item ? 'ratios' and nullif(record_item->'ratios'->>'roePct', '') is not null
+          then 'ROE ' || (record_item->'ratios'->>'roePct') || '%.'
+        else null
+      end,
+      case
+        when jsonb_array_length(coalesce(record_item->'businessNotes', '[]'::jsonb)) > 0
+          then coalesce(record_item->'businessNotes'->0->>'note', null)
+        else null
+      end
+    ))
+    into v_headline;
+
+    update analytics.company_snapshots_daily cs
+    set fundamentals_headline = coalesce(nullif(v_headline, ''), cs.fundamentals_headline)
+    where cs.company_id = v_company_id
+      and cs.snapshot_date = (
+        select max(snapshot_date)
+        from analytics.company_snapshots_daily
+        where company_id = v_company_id
+      );
+
+    inserted_count := inserted_count + 1;
+  end loop;
+
+  if v_ingestion_job_id is not null then
+    insert into admin.ingestion_logs (ingestion_job_id, log_level, message, payload)
+    values (
+      v_ingestion_job_id,
+      case when v_status in ('healthy', 'success') then 'info' else 'warning' end,
+      'Fundamentals refresh processed company records.',
+      jsonb_build_object(
+        'adapterKey', v_adapter_key,
+        'recordsProcessed', inserted_count,
+        'recordsSkipped', skipped_count
+      )
+    );
+  end if;
+
+  return jsonb_build_object(
+    'adapterKey', v_adapter_key,
+    'recordsProcessed', inserted_count,
+    'recordsSkipped', skipped_count,
+    'status', v_status
+  );
+end;
+$$;
+
+grant execute on function public.app_ingest_fundamentals_payload(jsonb) to service_role;
 
 create or replace function public.app_ingest_symbol_payload(payload jsonb)
 returns jsonb
@@ -1674,6 +2553,7 @@ declare
   level_item jsonb;
   note_item jsonb;
   news_item jsonb;
+  news_entity_item jsonb;
   event_item jsonb;
   v_symbol text := upper(coalesce(company_payload->>'symbol', ''));
   v_exchange text := upper(coalesce(company_payload->>'exchange', 'NSE'));
@@ -2100,6 +2980,21 @@ begin
       relevance = excluded.relevance,
       sentiment = excluded.sentiment,
       why_it_matters = excluded.why_it_matters;
+
+    delete from news.news_entities
+    where news_article_id = v_news_article_id;
+
+    for news_entity_item in
+      select value from jsonb_array_elements(coalesce(news_item->'entities', '[]'::jsonb))
+    loop
+      insert into news.news_entities (news_article_id, entity_type, entity_name, relevance_score)
+      values (
+        v_news_article_id,
+        coalesce(nullif(news_entity_item->>'entityType', ''), 'topic'),
+        coalesce(nullif(news_entity_item->>'entityName', ''), 'Unspecified'),
+        nullif(news_entity_item->>'relevanceScore', '')::numeric
+      );
+    end loop;
   end loop;
 
   for event_item in
@@ -2121,7 +3016,9 @@ begin
   if v_price_date is not null then
     insert into analytics.stock_behavior_daily (
       company_id, price_date, momentum_sensitivity, acceleration_score, trend_decay_score,
-      volatility_sensitivity, market_linkage_score, narrative
+      volatility_sensitivity, market_linkage_score, regime_label, macro_regime,
+      market_context_summary, benchmark_symbol, benchmark_return_pct, relative_strength_pct,
+      context_signals, narrative
     )
     values (
       v_company_id,
@@ -2131,6 +3028,13 @@ begin
       nullif(behavior_payload->>'trendDecayScore', '')::numeric,
       nullif(behavior_payload->>'volatilitySensitivity', '')::numeric,
       nullif(behavior_payload->>'marketLinkageScore', '')::numeric,
+      nullif(behavior_payload->>'regimeLabel', ''),
+      nullif(behavior_payload->>'macroRegime', ''),
+      nullif(behavior_payload->>'marketContextSummary', ''),
+      nullif(behavior_payload->>'benchmarkSymbol', ''),
+      nullif(behavior_payload->>'benchmarkReturnPct', '')::numeric,
+      nullif(behavior_payload->>'relativeStrengthPct', '')::numeric,
+      coalesce(behavior_payload->'contextSignals', '[]'::jsonb),
       behavior_payload->>'narrative'
     )
     on conflict (company_id, price_date) do update set
@@ -2139,6 +3043,13 @@ begin
       trend_decay_score = excluded.trend_decay_score,
       volatility_sensitivity = excluded.volatility_sensitivity,
       market_linkage_score = excluded.market_linkage_score,
+      regime_label = excluded.regime_label,
+      macro_regime = excluded.macro_regime,
+      market_context_summary = excluded.market_context_summary,
+      benchmark_symbol = excluded.benchmark_symbol,
+      benchmark_return_pct = excluded.benchmark_return_pct,
+      relative_strength_pct = excluded.relative_strength_pct,
+      context_signals = excluded.context_signals,
       narrative = excluded.narrative;
   end if;
 
@@ -2160,7 +3071,8 @@ begin
     returning id into v_strategy_id;
 
     insert into strategy.strategy_evaluations (
-      strategy_id, company_id, evaluation_date, matched, confidence_pct, invalidation, support_points, explanation
+      strategy_id, company_id, evaluation_date, matched, confidence_pct, source_snapshot_date,
+      matched_rule_count, total_rule_count, support_quality, provenance_note, invalidation, support_points, explanation
     )
     values (
       v_strategy_id,
@@ -2168,6 +3080,11 @@ begin
       coalesce(nullif(strategy_item->>'evaluationDate', '')::date, v_snapshot_date, current_date),
       coalesce((strategy_item->>'matched')::boolean, false),
       coalesce((strategy_item->>'confidencePct')::numeric, 0),
+      coalesce(nullif(strategy_item->>'sourceSnapshotDate', '')::date, v_snapshot_date, current_date),
+      nullif(strategy_item->>'matchedRuleCount', '')::integer,
+      nullif(strategy_item->>'totalRuleCount', '')::integer,
+      nullif(strategy_item->>'supportQuality', ''),
+      strategy_item->>'provenanceNote',
       strategy_item->>'invalidation',
       coalesce(strategy_item->'supportPoints', '[]'::jsonb),
       strategy_item->>'explanation'
@@ -2175,6 +3092,11 @@ begin
     on conflict (strategy_id, company_id, evaluation_date) do update set
       matched = excluded.matched,
       confidence_pct = excluded.confidence_pct,
+      source_snapshot_date = excluded.source_snapshot_date,
+      matched_rule_count = excluded.matched_rule_count,
+      total_rule_count = excluded.total_rule_count,
+      support_quality = excluded.support_quality,
+      provenance_note = excluded.provenance_note,
       invalidation = excluded.invalidation,
       support_points = excluded.support_points,
       explanation = excluded.explanation;
@@ -2184,7 +3106,8 @@ begin
     select value from jsonb_array_elements(coalesce(payload->'scenarios', '[]'::jsonb))
   loop
     insert into strategy.scenario_outputs (
-      company_id, evaluation_date, stance, title, confidence_pct, trigger_condition, invalidation, payoff_frame, explanation
+      company_id, evaluation_date, stance, title, confidence_pct, source_snapshot_date, provenance_note,
+      trigger_condition, invalidation, payoff_frame, explanation
     )
     values (
       v_company_id,
@@ -2192,6 +3115,8 @@ begin
       scenario_item->>'stance',
       scenario_item->>'title',
       coalesce((scenario_item->>'confidencePct')::numeric, 0),
+      coalesce(nullif(scenario_item->>'sourceSnapshotDate', '')::date, v_snapshot_date, current_date),
+      scenario_item->>'provenanceNote',
       scenario_item->>'triggerCondition',
       scenario_item->>'invalidation',
       scenario_item->>'payoffFrame',
@@ -2199,6 +3124,8 @@ begin
     )
     on conflict (company_id, evaluation_date, stance, title) do update set
       confidence_pct = excluded.confidence_pct,
+      source_snapshot_date = excluded.source_snapshot_date,
+      provenance_note = excluded.provenance_note,
       trigger_condition = excluded.trigger_condition,
       invalidation = excluded.invalidation,
       payoff_frame = excluded.payoff_frame,

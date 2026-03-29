@@ -1,0 +1,66 @@
+{
+  "entity": {
+    "symbol": "TCS",
+    "exchange": "NSE"
+  },
+  "filingDate": "2026-03-29",
+  "facts": {
+    "yearly": [
+      {
+        "fiscalYear": "FY25",
+        "revenue_cr": 255324,
+        "ebitda_cr": 66487,
+        "pat_cr": 52112,
+        "operating_cash_flow_cr": 59320,
+        "ebitda_margin_pct": 26.0,
+        "pat_margin_pct": 20.4,
+        "roe_pct": 46.2,
+        "roce_pct": 57.8,
+        "net_debt_to_ebitda": -0.5
+      }
+    ],
+    "quarterly": [
+      {
+        "fiscalQuarter": "Q3 FY26",
+        "sales_cr": 64520,
+        "ebitda_cr": 16990,
+        "profitAfterTaxCr": 13240
+      }
+    ],
+    "segments": [
+      {
+        "segment": "BFSI",
+        "share_pct": 33,
+        "asOfPeriod": "FY26E"
+      }
+    ],
+    "geographies": [
+      {
+        "geography": "North America",
+        "share_pct": 51,
+        "asOfPeriod": "FY26E"
+      }
+    ],
+    "notes": [
+      {
+        "text": "Large-deal conversion and margin resilience remain the central quality anchors.",
+        "sourceUrl": "https://www.tcs.com"
+      }
+    ]
+  },
+  "ratios": {
+    "roe_pct": 46.8,
+    "roce_pct": 58.3,
+    "ebitda_margin_pct": 26.1,
+    "pat_margin_pct": 19.8,
+    "revenue_growth_pct": 10.6
+  },
+  "peerGroup": {
+    "slug": "largecap-leaders",
+    "label": "Large Cap Leaders",
+    "members": [
+      "RELIANCE",
+      "INFY"
+    ]
+  }
+}

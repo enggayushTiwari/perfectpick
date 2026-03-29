@@ -24,4 +24,26 @@ PerfectPick is a web-first Indian stock research platform starter built with Nex
 
 ## Current implementation note
 
-The web app runs in demo snapshot mode until Supabase environment variables and real workers are configured. The schema, route contracts, and worker interfaces match the production design, so live adapters can replace the fixtures without rewriting the UI.
+The platform now reads live company, fundamentals, technicals, news, behavior, strategy, and admin data from Supabase `public.app_*` views when those rows exist. On-demand hydration and worker imports write into the private schemas, while the web app stays on the public read layer.
+
+## AI explanation layer
+
+Gemini can now be used as an explanation layer on top of stored platform data. Set one of these server-side env vars:
+
+- `GOOGLE_GENERATIVE_AI_API_KEY`
+- `GEMINI_API_KEY`
+- `GOOGLE_API_KEY`
+
+Optional:
+
+- `GOOGLE_GENAI_MODEL`
+- `GEMINI_MODEL`
+
+Available grounded explanation endpoints:
+
+- `/api/companies/{symbol}/ai-summary`
+- `/api/companies/{symbol}/ai-fundamentals`
+- `/api/companies/{symbol}/ai-technicals`
+- `/api/companies/{symbol}/ai-strategies`
+
+These endpoints only explain live structured rows. If the required stored data is missing, they return an unavailable state instead of narrating fallback fixtures.

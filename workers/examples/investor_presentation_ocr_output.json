@@ -1,0 +1,78 @@
+{
+  "company": {
+    "symbol": "INFY",
+    "exchange": "NSE"
+  },
+  "asOfDate": "2026-03-29",
+  "sourceKind": "investor-presentation",
+  "yearlyFinancials": [
+    {
+      "period": "FY25",
+      "revenueCr": 161800.0,
+      "ebitdaCr": 41020.0,
+      "patCr": 26720.0,
+      "ebitdaMarginPct": 25.4,
+      "patMarginPct": 16.5,
+      "roePct": 31.2,
+      "rocePct": 38.5
+    },
+    {
+      "period": "FY26",
+      "revenueCr": 41050.0,
+      "ebitdaCr": 10480.0,
+      "patCr": 6810.0,
+      "roePct": 31.4,
+      "rocePct": 38.8
+    }
+  ],
+  "quarterlyFinancials": [
+    {
+      "period": "Q3 FY26",
+      "revenueCr": 41050.0,
+      "ebitdaCr": 10480.0,
+      "patCr": 6810.0,
+      "roePct": 31.4,
+      "rocePct": 38.8
+    }
+  ],
+  "ratios": {
+    "roePct": 31.2,
+    "rocePct": 38.5,
+    "revenueGrowthPct": 9.4
+  },
+  "segments": [
+    {
+      "label": "Financial Services",
+      "valuePct": 29.0
+    },
+    {
+      "label": "Manufacturing",
+      "valuePct": 16.0
+    }
+  ],
+  "geographies": [
+    {
+      "label": "North America",
+      "valuePct": 58.0
+    },
+    {
+      "label": "Europe",
+      "valuePct": 24.0
+    }
+  ],
+  "notes": [
+    {
+      "sourceKind": "investor-presentation",
+      "note": "Client budget conversion remains the central monitor for near-term confidence.",
+      "sourceExcerpt": "Client budget conversion remains the central monitor for near-term confidence."
+    }
+  ],
+  "peerGroup": {
+    "slug": "largecap-leaders",
+    "label": "Large Cap Leaders",
+    "members": [
+      "TCS",
+      "RELIANCE"
+    ]
+  }
+}

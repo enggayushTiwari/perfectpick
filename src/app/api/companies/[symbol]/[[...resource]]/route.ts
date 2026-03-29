@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { getAiExplanation } from "@/lib/ai";
 import {
   getBehavior,
+  getCorporateActions,
   getEvents,
   getFinancials,
   getFundamentals,
@@ -19,7 +21,7 @@ import {
   getTrendSummary
 } from "@/lib/repositories";
 import type { Period } from "@/lib/contracts";
-import { ensureTickerHydrated } from "@/lib/on-demand-ingestion";
+import { ensureTickerHydrated, refreshTickerNewsEvents } from "@/lib/on-demand-ingestion";
 
 type RouteContext = {
   params: Promise<{
@@ -42,6 +44,14 @@ export async function GET(request: Request, context: RouteContext) {
       case "":
       case "overview":
         return getOverview(symbol);
+      case "ai-summary":
+        return getAiExplanation(symbol, "summary");
+      case "ai-fundamentals":
+        return getAiExplanation(symbol, "fundamentals");
+      case "ai-technicals":
+        return getAiExplanation(symbol, "technicals");
+      case "ai-strategies":
+        return getAiExplanation(symbol, "strategies");
       case "fundamentals":
         return getFundamentals(symbol);
       case "financials":
@@ -58,6 +68,8 @@ export async function GET(request: Request, context: RouteContext) {
         return getTechnicalIndicators(symbol);
       case "support-resistance":
         return getSupportResistance(symbol);
+      case "corporate-actions":
+        return getCorporateActions(symbol);
       case "trend-summary":
         return getTrendSummary(symbol);
       case "news":
@@ -93,7 +105,7 @@ export async function POST(request: Request, context: RouteContext) {
   const { symbol, resource = [] } = await context.params;
   const path = resource.join("/");
 
-  if (path !== "hydrate") {
+  if (path !== "hydrate" && path !== "news-refresh" && path !== "behavior-refresh") {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -104,7 +116,10 @@ export async function POST(request: Request, context: RouteContext) {
     body = {};
   }
 
-  const result = await ensureTickerHydrated(symbol, { force: body.force ?? true });
+  const result =
+    path === "news-refresh"
+      ? await refreshTickerNewsEvents(symbol)
+      : await ensureTickerHydrated(symbol, { force: body.force ?? true });
   const status = result.ingested ? 200 : 502;
   return NextResponse.json(result, { status });
 }

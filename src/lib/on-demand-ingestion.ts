@@ -22,6 +22,15 @@ type HydrationResult = {
   snapshotDate?: string;
 };
 
+type NewsRefreshResult = {
+  symbol: string;
+  yahooSymbol?: string;
+  ingested: boolean;
+  reason?: string;
+  articleCount?: number;
+  eventCount?: number;
+};
+
 type StoredCoverageStatus = {
   snapshotDate: string;
   isFresh: boolean;
@@ -167,6 +176,63 @@ function relativeStrengthIndex(values: number[], period = 14) {
   return round(100 - 100 / (1 + rs), 2);
 }
 
+function returnsSeries(values: number[]) {
+  const returns: number[] = [];
+
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index - 1] === 0) {
+      continue;
+    }
+    returns.push((values[index] - values[index - 1]) / values[index - 1]);
+  }
+
+  return returns;
+}
+
+function correlation(left: number[], right: number[]) {
+  const length = Math.min(left.length, right.length);
+  if (length < 10) {
+    return null;
+  }
+
+  const a = left.slice(-length);
+  const b = right.slice(-length);
+  const meanA = a.reduce((sum, value) => sum + value, 0) / length;
+  const meanB = b.reduce((sum, value) => sum + value, 0) / length;
+
+  let numerator = 0;
+  let varianceA = 0;
+  let varianceB = 0;
+
+  for (let index = 0; index < length; index += 1) {
+    const diffA = a[index] - meanA;
+    const diffB = b[index] - meanB;
+    numerator += diffA * diffB;
+    varianceA += diffA ** 2;
+    varianceB += diffB ** 2;
+  }
+
+  if (!varianceA || !varianceB) {
+    return null;
+  }
+
+  return numerator / Math.sqrt(varianceA * varianceB);
+}
+
+function lookbackReturnPct(values: number[], lookbackDays = 20) {
+  if (values.length <= lookbackDays) {
+    return null;
+  }
+
+  const start = values.at(-(lookbackDays + 1));
+  const finish = values.at(-1);
+  if (!start || finish === undefined || start === 0) {
+    return null;
+  }
+
+  return round(((finish - start) / start) * 100, 2);
+}
+
 function averageTrueRange(bars: PriceBar[], period = 14) {
   if (bars.length <= period) {
     return null;
@@ -230,6 +296,64 @@ function inferSentiment(title: string) {
   return { sentiment: "neutral" as const, impactDirection: "neutral", relevance: "medium" as const, impactScore: 54 };
 }
 
+function classifyEventType(title: string) {
+  const normalized = title.toLowerCase();
+  if (normalized.includes("earnings") || normalized.includes("result")) {
+    return "Earnings";
+  }
+  if (normalized.includes("dividend")) {
+    return "Dividend";
+  }
+  if (normalized.includes("filing") || normalized.includes("annual report")) {
+    return "Filing";
+  }
+  if (normalized.includes("agm") || normalized.includes("meeting")) {
+    return "Corporate";
+  }
+  return "Event";
+}
+
+function buildNewsEntities(input: { symbol: string; companyName: string; sector: string; industry: string; title: string }) {
+  const entities = [
+    { entityType: "ticker", entityName: input.symbol.toUpperCase(), relevanceScore: 0.99 },
+    { entityType: "company", entityName: input.companyName, relevanceScore: 0.98 }
+  ];
+
+  if (input.sector && input.sector !== "Unknown") {
+    entities.push({ entityType: "sector", entityName: input.sector, relevanceScore: 0.65 });
+  }
+  if (input.industry && input.industry !== "Unknown") {
+    entities.push({ entityType: "industry", entityName: input.industry, relevanceScore: 0.61 });
+  }
+
+  const normalized = input.title.toLowerCase();
+  const topicKeywords = [
+    ["earnings", "earnings"],
+    ["result", "earnings"],
+    ["margin", "margins"],
+    ["deal", "deals"],
+    ["demand", "demand"],
+    ["guidance", "guidance"],
+    ["dividend", "dividend"],
+    ["retail", "retail"],
+    ["telecom", "telecom"],
+    ["capex", "capex"]
+  ] as const;
+
+  for (const [keyword, topic] of topicKeywords) {
+    if (normalized.includes(keyword)) {
+      entities.push({ entityType: "topic", entityName: topic, relevanceScore: 0.56 });
+    }
+  }
+
+  return entities.filter(
+    (entity, index, collection) =>
+      collection.findIndex(
+        (candidate) => candidate.entityType === entity.entityType && candidate.entityName.toLowerCase() === entity.entityName.toLowerCase()
+      ) === index
+  );
+}
+
 function inferTrendState(close: number, sma20: number | null, sma50: number | null, sma200: number | null, rsi14: number | null) {
   if (sma20 && sma50 && sma200 && close > sma20 && sma20 > sma50 && sma50 > sma200 && (rsi14 ?? 0) >= 58) {
     return "Bullish with trend alignment";
@@ -267,19 +391,93 @@ function buildTechnicalEvents(close: number, sma20: number | null, sma50: number
   return events;
 }
 
-function buildBehaviorSnapshot(closeSeries: number[], latestClose: number, sma20: number | null, sma50: number | null, rsi14: number | null) {
+function classifyMacroRegime(sector: string, benchmarkReturnPct: number | null) {
+  const normalizedSector = sector.toLowerCase();
+
+  if (benchmarkReturnPct !== null && benchmarkReturnPct >= 3) {
+    if (["financial", "bank", "auto", "real estate", "capital goods"].some((token) => normalizedSector.includes(token))) {
+      return "Risk-on domestic cycle";
+    }
+
+    return "Risk-on broad market";
+  }
+
+  if (benchmarkReturnPct !== null && benchmarkReturnPct <= -3) {
+    return "Risk-off / defensive tape";
+  }
+
+  if (["information technology", "it", "pharma", "health"].some((token) => normalizedSector.includes(token))) {
+    return "Global-demand sensitive";
+  }
+
+  return "Range-bound broad market";
+}
+
+function buildBehaviorSnapshot(input: {
+  closeSeries: number[];
+  latestClose: number;
+  sma20: number | null;
+  sma50: number | null;
+  rsi14: number | null;
+  benchmarkCloseSeries: number[];
+  sector: string;
+  benchmarkSymbol?: string;
+}) {
+  const { closeSeries, latestClose, sma20, sma50, rsi14, benchmarkCloseSeries, sector } = input;
   const oneMonth = closeSeries.slice(-21);
   const dailyReturns = oneMonth.slice(1).map((value, index) => (value - oneMonth[index]) / oneMonth[index]);
   const avgAbsReturn =
     dailyReturns.length > 0
       ? dailyReturns.reduce((sum, value) => sum + Math.abs(value), 0) / dailyReturns.length
       : 0;
+  const stockReturnSeries = returnsSeries(closeSeries);
+  const benchmarkReturnSeries = returnsSeries(benchmarkCloseSeries);
+  const stockLookbackReturnPct = lookbackReturnPct(closeSeries, 20);
+  const benchmarkReturnPct = lookbackReturnPct(benchmarkCloseSeries, 20);
+  const returnCorrelation = correlation(stockReturnSeries, benchmarkReturnSeries);
   const momentumSensitivity = Math.max(15, Math.min(90, round(((rsi14 ?? 50) - 30) * 1.6, 0)));
   const accelerationScore =
     sma20 && sma50 ? Math.max(10, Math.min(90, round(((sma20 - sma50) / latestClose) * 1200 + 50, 0))) : 50;
   const trendDecayScore = Math.max(10, Math.min(90, round(60 - momentumSensitivity / 2, 0)));
   const volatilitySensitivity = Math.max(10, Math.min(90, round(avgAbsReturn * 1400, 0)));
-  const marketLinkageScore = 48;
+  const marketLinkageScore =
+    returnCorrelation === null ? 48 : Math.max(10, Math.min(90, round(50 + returnCorrelation * 35, 0)));
+  const relativeStrengthPct =
+    stockLookbackReturnPct !== null && benchmarkReturnPct !== null ? round(stockLookbackReturnPct - benchmarkReturnPct, 2) : null;
+  const benchmarkSymbol = input.benchmarkSymbol ?? "^NSEI";
+  const macroRegime = classifyMacroRegime(sector, benchmarkReturnPct);
+  const regimeLabel =
+    momentumSensitivity >= 60 && accelerationScore >= 55 && trendDecayScore <= 40
+      ? "Trend-following"
+      : volatilitySensitivity >= 65
+        ? "High-volatility"
+        : marketLinkageScore >= 60
+          ? "Market-linked"
+          : "Balanced";
+  const contextSignals = [
+    benchmarkReturnPct === null
+      ? "Benchmark context is unavailable, so broad-market linkage is estimated from local price behavior."
+      : `${benchmarkSymbol} is ${benchmarkReturnPct >= 0 ? "up" : "down"} ${Math.abs(benchmarkReturnPct).toFixed(1)}% over the recent monthly window.`,
+    relativeStrengthPct === null
+      ? "Relative strength versus the benchmark is not available yet."
+      : relativeStrengthPct >= 0
+        ? `The stock is outperforming the benchmark by ${relativeStrengthPct.toFixed(1)} percentage points.`
+        : `The stock is lagging the benchmark by ${Math.abs(relativeStrengthPct).toFixed(1)} percentage points.`,
+    marketLinkageScore >= 60
+      ? "Broad market direction is still explaining a meaningful part of the move."
+      : "Company-specific price behavior is carrying more of the move than the benchmark alone.",
+    volatilitySensitivity >= 60
+      ? "Volatility remains elevated enough to warrant wider risk framing."
+      : "Volatility sensitivity remains relatively contained."
+  ];
+  const marketContextSummary =
+    benchmarkReturnPct === null
+      ? `${macroRegime}. Market-context overlays are partially available because the benchmark comparison could not be refreshed.`
+      : `${macroRegime}. ${benchmarkSymbol} has moved ${benchmarkReturnPct >= 0 ? "up" : "down"} ${Math.abs(
+          benchmarkReturnPct
+        ).toFixed(1)}% over the recent lookback, and this stock is ${
+          relativeStrengthPct !== null && relativeStrengthPct >= 0 ? "outperforming" : "underperforming"
+        } that benchmark${relativeStrengthPct === null ? "" : ` by ${Math.abs(relativeStrengthPct).toFixed(1)} percentage points`}.`;
 
   return {
     momentumSensitivity,
@@ -287,6 +485,13 @@ function buildBehaviorSnapshot(closeSeries: number[], latestClose: number, sma20
     trendDecayScore,
     volatilitySensitivity,
     marketLinkageScore,
+    regimeLabel,
+    macroRegime,
+    benchmarkSymbol,
+    benchmarkReturnPct,
+    relativeStrengthPct,
+    marketContextSummary,
+    contextSignals,
     narrative:
       momentumSensitivity >= 60
         ? "The stock is behaving like a live trend candidate, with momentum carrying most of the current attention."
@@ -323,12 +528,16 @@ function buildStrategies(input: {
       strategyName: "Trend Continuation",
       matched: trendMatch,
       confidencePct: trendMatch ? 78 : 34,
+      matchedRuleCount: [trendMatch, (input.rsi14 ?? 0) >= 55, input.volumeConfirmation].filter(Boolean).length,
+      totalRuleCount: 3,
+      supportQuality: trendMatch ? "strong" : (input.rsi14 ?? 0) >= 50 ? "moderate" : "weak",
       supportPoints: [
         trendMatch ? "Price sits above aligned moving averages" : "Trend stack is incomplete",
         (input.rsi14 ?? 0) >= 55 ? "RSI remains in constructive territory" : "Momentum still needs improvement",
         input.volumeConfirmation ? "Volume confirmation present" : "Volume confirmation missing"
       ],
       invalidation: "Daily close below the short-term trend shelf.",
+      provenanceNote: "Computed from persisted moving-average alignment, RSI, and volume participation checks.",
       explanation: trendMatch
         ? "Aligned moving averages plus healthy momentum fit a continuation setup."
         : "Trend is not aligned enough for a clean continuation setup.",
@@ -339,8 +548,12 @@ function buildStrategies(input: {
       strategyName: "Breakout Confirmation",
       matched: breakoutMatch,
       confidencePct: breakoutMatch ? 72 : 40,
+      matchedRuleCount: [input.sma20 !== null && input.close > input.sma20, input.volumeConfirmation, (input.rsi14 ?? 0) >= 60].filter(Boolean).length,
+      totalRuleCount: 3,
+      supportQuality: breakoutMatch ? "strong" : input.volumeConfirmation ? "moderate" : "weak",
       supportPoints: ["Recent price expansion", input.volumeConfirmation ? "Volume confirmation" : "Volume still needs confirmation"],
       invalidation: "Immediate rejection back into the prior base.",
+      provenanceNote: "Derived from breakout participation, short-term trend position, and momentum confirmation.",
       explanation: breakoutMatch
         ? "This is a live breakout candidate because participation confirms the move."
         : "The setup is close, but still lacks one of the confirmation conditions.",
@@ -351,8 +564,12 @@ function buildStrategies(input: {
       strategyName: "Mean Reversion Watchlist",
       matched: meanReversion,
       confidencePct: meanReversion ? 67 : 20,
+      matchedRuleCount: [meanReversion].filter(Boolean).length,
+      totalRuleCount: 1,
+      supportQuality: meanReversion ? "moderate" : "weak",
       supportPoints: [meanReversion ? "RSI reset condition met" : "No oversold reset visible"],
       invalidation: "Momentum expands back into trend continuation.",
+      provenanceNote: "Driven by oversold reset logic from the latest RSI snapshot.",
       explanation: meanReversion
         ? "Oversold conditions make the stock a watchlist candidate for mean reversion."
         : "The stock is not sufficiently washed out for a mean-reversion setup.",
@@ -363,11 +580,15 @@ function buildStrategies(input: {
       strategyName: "Quality + Momentum",
       matched: qualityMomentum,
       confidencePct: qualityMomentum ? 80 : 38,
+      matchedRuleCount: [(input.roePct ?? 0) >= 18, trendMatch].filter(Boolean).length,
+      totalRuleCount: 2,
+      supportQuality: qualityMomentum ? "strong" : trendMatch || (input.roePct ?? 0) >= 18 ? "moderate" : "weak",
       supportPoints: [
         input.roePct !== null ? `ROE ${input.roePct.toFixed(1)}%` : "ROE unavailable",
         trendMatch ? "Trend continuation structure" : "Trend support incomplete"
       ],
       invalidation: "Quality profile weakens or trend support breaks.",
+      provenanceNote: "Combines return-on-equity quality checks with trend continuation structure.",
       explanation: qualityMomentum
         ? "Strong capital efficiency plus trend support creates a quality-momentum profile."
         : "The setup lacks either the return profile or the trend support for this bucket.",
@@ -378,8 +599,12 @@ function buildStrategies(input: {
       strategyName: "Event Risk Watch",
       matched: input.upcomingEvent,
       confidencePct: input.upcomingEvent ? 60 : 22,
+      matchedRuleCount: [input.upcomingEvent].filter(Boolean).length,
+      totalRuleCount: 1,
+      supportQuality: input.upcomingEvent ? "moderate" : "weak",
       supportPoints: [input.upcomingEvent ? "Upcoming scheduled event" : "No near event trigger flagged"],
       invalidation: "Catalyst passes without material information change.",
+      provenanceNote: "Triggered from the upcoming event calendar window in the latest refresh.",
       explanation: input.upcomingEvent
         ? "Upcoming events justify a wider scenario frame."
         : "No catalyst is close enough to elevate event risk.",
@@ -402,32 +627,38 @@ function buildScenarios(input: {
   return [
     {
       evaluationDate: input.snapshotDate,
+      sourceSnapshotDate: input.snapshotDate,
       stance: "Bullish",
       title: "Trend continuation above the current shelf",
       confidencePct: input.trendState.includes("Bullish") ? 70 : 58,
       triggerCondition: `Sustained closes above ${resistance.toFixed(2)} with momentum remaining constructive.`,
       invalidation: `Loss of ${support.toFixed(2)} on a closing basis.`,
       payoffFrame: "Favors continuation if participation holds up.",
+      provenanceNote: "Bullish path is derived from the current trend state and nearest support/resistance structure.",
       explanation: "The bullish path depends on the stock holding the current support shelf and extending through the nearest resistance zone."
     },
     {
       evaluationDate: input.snapshotDate,
+      sourceSnapshotDate: input.snapshotDate,
       stance: "Neutral",
       title: "Range digestion before the next directional move",
       confidencePct: 55,
       triggerCondition: `Price oscillates between ${support.toFixed(2)} and ${resistance.toFixed(2)} while momentum cools.`,
       invalidation: "A decisive breakout or breakdown invalidates the range case.",
       payoffFrame: "Favors patience over urgency.",
+      provenanceNote: "Neutral path comes from consolidation logic around the current support shelf and resistance cap.",
       explanation: "A neutral consolidation is plausible after a fresh move because the market often pauses before committing to the next leg."
     },
     {
       evaluationDate: input.snapshotDate,
+      sourceSnapshotDate: input.snapshotDate,
       stance: "Bearish",
       title: "Break below support into a deeper reset",
       confidencePct: 34,
       triggerCondition: `Price loses ${support.toFixed(2)} and fails to reclaim it quickly.`,
       invalidation: `Immediate recovery above ${resistance.toFixed(2)}.`,
       payoffFrame: `Would open space toward deeper support near ${majorSupport.toFixed(2)}.`,
+      provenanceNote: "Bearish path is anchored to a failed-hold scenario at the current support shelf.",
       explanation: "The bearish case remains secondary, but a failed hold of current support would weaken the short-term structure."
     }
   ];
@@ -470,7 +701,7 @@ async function resolveYahooSymbol(symbol: string) {
   return null;
 }
 
-async function fetchNews(query: string, symbol: string) {
+async function fetchNews(query: string, symbol: string, companyName: string, sector: string, industry: string) {
   try {
     const search = await withRetry(() =>
       yf.search(query, { region: "IN", lang: "en-IN", quotesCount: 1, newsCount: 5 })
@@ -491,12 +722,144 @@ async function fetchNews(query: string, symbol: string) {
           impactScore: sentiment.impactScore,
           relevance: sentiment.relevance,
           sentiment: sentiment.sentiment,
-          whyItMatters: `This headline is linked to ${symbol} in Yahoo Finance search results and may influence short-term attention around the stock.`
+          whyItMatters: `This headline is linked to ${symbol} in Yahoo Finance search results and may influence short-term attention around the stock.`,
+          entities: buildNewsEntities({
+            symbol,
+            companyName,
+            sector,
+            industry,
+            title: String(item.title || `${symbol} related update`)
+          })
         };
       });
   } catch {
     return [];
   }
+}
+
+async function loadYahooSummaryForSymbol(symbol: string) {
+  const resolved = await resolveYahooSymbol(symbol);
+  if (!resolved) {
+    return null;
+  }
+
+  const { yahooSymbol, summary } = resolved;
+  const price: any = summary.price ?? {};
+  const profile: any = summary.summaryProfile ?? summary.assetProfile ?? {};
+  const companyName = String(price.longName || price.shortName || symbol);
+  const sector = String(profile.sectorDisp || profile.sector || "Unknown");
+  const industry = String(profile.industryDisp || profile.industry || "Unknown");
+
+  return {
+    yahooSymbol,
+    summary,
+    companyName,
+    sector,
+    industry
+  };
+}
+
+export async function refreshTickerNewsEvents(symbol: string): Promise<NewsRefreshResult> {
+  const normalizedSymbol = symbol.trim().toUpperCase();
+  const adminClient = createSupabaseAdminClient();
+
+  if (!normalizedSymbol || !adminClient) {
+    return { symbol: normalizedSymbol, ingested: false, reason: "Supabase admin client is unavailable." };
+  }
+
+  const loaded = await loadYahooSummaryForSymbol(normalizedSymbol);
+  if (!loaded) {
+    return { symbol: normalizedSymbol, ingested: false, reason: "Could not resolve the ticker through Yahoo Finance." };
+  }
+
+  const { yahooSymbol, summary, companyName, sector, industry } = loaded;
+  const news = await fetchNews(companyName, normalizedSymbol, companyName, sector, industry);
+  const events = [];
+  const earningsDates = summary.calendarEvents?.earnings?.earningsDate ?? [];
+  const nextEarningsDate = Array.isArray(earningsDates) ? earningsDates.find((date) => date instanceof Date) : undefined;
+
+  if (nextEarningsDate instanceof Date) {
+    events.push({
+      title: "Upcoming earnings date",
+      eventType: "Earnings",
+      eventDate: nextEarningsDate.toISOString().slice(0, 10),
+      note: "Watch guidance, demand commentary, and management tone around the next result window."
+    });
+  }
+  if (summary.calendarEvents?.exDividendDate instanceof Date) {
+    events.push({
+      title: "Ex-dividend date",
+      eventType: "Dividend",
+      eventDate: summary.calendarEvents.exDividendDate.toISOString().slice(0, 10),
+      note: "Dividend calendar event surfaced through the market data provider."
+    });
+  }
+
+  for (const article of news) {
+    const eventType = classifyEventType(article.headline);
+    if (eventType !== "Event") {
+      events.push({
+        title: article.headline,
+        eventType,
+        eventDate: article.publishedAt.slice(0, 10),
+        note: article.whyItMatters
+      });
+    }
+  }
+
+  const dedupedEvents = events.filter(
+    (event, index, collection) =>
+      collection.findIndex(
+        (candidate) =>
+          candidate.title.toLowerCase() === event.title.toLowerCase() &&
+          candidate.eventDate === event.eventDate &&
+          candidate.eventType === event.eventType
+      ) === index
+  );
+
+  const payload = {
+    company: {
+      symbol: normalizedSymbol,
+      exchange: yahooSymbol.endsWith(".BO") ? "BSE" : "NSE",
+      yahooSymbol,
+      displayName: companyName,
+      legalName: companyName,
+      slug: slugify(companyName),
+      sector,
+      sectorSlug: sector !== "Unknown" ? slugify(sector) : null,
+      industry,
+      industrySlug: industry !== "Unknown" ? slugify(industry) : null,
+      businessSummary: String((summary.summaryProfile ?? summary.assetProfile ?? {}).longBusinessSummary || "").trim() || null
+    },
+    news,
+    events: dedupedEvents,
+    admin: {
+      adapterKey: "yahoo_finance_news",
+      adapterLabel: "Yahoo Finance News",
+      sourceType: "public-unofficial",
+      freshnessExpectation: "On-demand news/event refresh",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      sourceRunStatus: "healthy",
+      sourceRunDetail: `News and event refresh completed for ${normalizedSymbol} using ${yahooSymbol}.`,
+      jobStatus: "success",
+      jobNote: `Loaded ${news.length} news items and ${dedupedEvents.length} events for ${normalizedSymbol}.`
+    }
+  };
+
+  const { error } = await adminClient.rpc("app_ingest_symbol_payload", { payload });
+  if (error) {
+    return { symbol: normalizedSymbol, yahooSymbol, ingested: false, reason: error.message };
+  }
+
+  return {
+    symbol: normalizedSymbol,
+    yahooSymbol,
+    ingested: true,
+    articleCount: news.length,
+    eventCount: dedupedEvents.length,
+    reason: "News and events refreshed into Supabase."
+  };
 }
 
 export async function searchRemoteTickers(query: string): Promise<SearchResult[]> {
@@ -591,6 +954,12 @@ export async function ensureTickerHydrated(
       interval: "1d"
     })
   );
+  const benchmarkChart = await withRetry(() =>
+    yf.chart("^NSEI", {
+      period1: new Date(Date.now() - 370 * 24 * 60 * 60 * 1000),
+      interval: "1d"
+    })
+  ).catch(() => null);
 
   const rawBars = chart.quotes
     .filter((quote) => quote.date && quote.close !== null && quote.open !== null && quote.high !== null && quote.low !== null)
@@ -609,6 +978,11 @@ export async function ensureTickerHydrated(
   if (!rawBars.length) {
     return { symbol: normalizedSymbol, yahooSymbol, ingested: false, reason: "Historical price data came back empty." };
   }
+
+  const benchmarkBars =
+    benchmarkChart?.quotes
+      ?.filter((quote) => quote.date && quote.close !== null)
+      .map((quote) => round(Number(quote.close))) ?? [];
 
   const latestBar = rawBars.at(-1)!;
   const closes = rawBars.map((bar) => bar.close);
@@ -666,7 +1040,16 @@ export async function ensureTickerHydrated(
     `${companyName} is tracked through Yahoo Finance and hydrated into Supabase on demand.`;
   const sector = String(profile.sectorDisp || profile.sector || "Unknown");
   const industry = String(profile.industryDisp || profile.industry || "Unknown");
-  const behavior = buildBehaviorSnapshot(closes, latestBar.close, sma20, sma50, rsi14);
+  const behavior = buildBehaviorSnapshot({
+    closeSeries: closes,
+    latestClose: latestBar.close,
+    sma20,
+    sma50,
+    rsi14,
+    benchmarkCloseSeries: benchmarkBars,
+    sector,
+    benchmarkSymbol: "^NSEI"
+  });
   const strategies = buildStrategies({
     symbol: normalizedSymbol,
     close: latestBar.close,
@@ -716,7 +1099,7 @@ export async function ensureTickerHydrated(
       };
     }) ?? [];
 
-  const news = await fetchNews(companyName, normalizedSymbol);
+  const news = await fetchNews(companyName, normalizedSymbol, companyName, sector, industry);
   const businessNotes = [
     {
       sourceKind: "company-profile",

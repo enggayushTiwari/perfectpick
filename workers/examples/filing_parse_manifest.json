@@ -1,0 +1,40 @@
+{
+  "jobs": [
+    {
+      "sourceType": "annual-report-ocr",
+      "inputPath": "C:\\Users\\ayush\\.gemini\\antigravity\\scratch\\perfectpick\\workers\\examples\\annual_report_ocr_sample.txt",
+      "outputPath": "C:\\Users\\ayush\\.gemini\\antigravity\\scratch\\perfectpick\\workers\\examples\\annual_report_ocr_output.json",
+      "metadata": {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "asOfDate": "2026-03-29",
+        "peerGroupSlug": "largecap-leaders",
+        "peerGroupLabel": "Large Cap Leaders",
+        "peerMembers": ["TCS", "INFY"]
+      }
+    },
+    {
+      "sourceType": "mca-xbrl-json",
+      "inputPath": "C:\\Users\\ayush\\.gemini\\antigravity\\scratch\\perfectpick\\workers\\examples\\mca_xbrl_extract_template.json",
+      "outputPath": "C:\\Users\\ayush\\.gemini\\antigravity\\scratch\\perfectpick\\workers\\examples\\mca_xbrl_output.json",
+      "metadata": {
+        "symbol": "TCS",
+        "exchange": "NSE",
+        "asOfDate": "2026-03-29"
+      }
+    },
+    {
+      "sourceType": "investor-presentation-ocr",
+      "inputPath": "C:\\Users\\ayush\\.gemini\\antigravity\\scratch\\perfectpick\\workers\\examples\\investor_presentation_ocr_sample.txt",
+      "outputPath": "C:\\Users\\ayush\\.gemini\\antigravity\\scratch\\perfectpick\\workers\\examples\\investor_presentation_ocr_output.json",
+      "metadata": {
+        "symbol": "INFY",
+        "exchange": "NSE",
+        "asOfDate": "2026-03-29",
+        "peerGroupSlug": "largecap-leaders",
+        "peerGroupLabel": "Large Cap Leaders",
+        "peerMembers": ["TCS", "RELIANCE"]
+      }
+    }
+  ]
+}
