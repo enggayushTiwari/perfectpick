@@ -1,0 +1,14 @@
+[project]
+name = "perfectpick-workers"
+version = "0.1.0"
+description = "Ingestion and analytics workers for PerfectPick"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+perfectpick-workers = "stock_platform.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
